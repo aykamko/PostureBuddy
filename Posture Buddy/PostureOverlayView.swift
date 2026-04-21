@@ -32,6 +32,7 @@ struct PostureOverlayView: View {
             let kp = pose.keypoints
             let lineColor = pose.score.map { gradeColor($0.grade) } ?? .white.opacity(0.6)
 
+            // Body skeleton
             for (a, b) in Self.connections {
                 guard let ptA = kp[a], let ptB = kp[b] else { continue }
                 var path = Path()
@@ -39,11 +40,33 @@ struct PostureOverlayView: View {
                 path.addLine(to: visionToCanvas(ptB, in: size))
                 context.stroke(path, with: .color(lineColor), lineWidth: 3)
             }
-
             for (_, point) in kp {
                 let center = visionToCanvas(point, in: size)
                 let rect = CGRect(x: center.x - 5, y: center.y - 5, width: 10, height: 10)
                 context.fill(Path(ellipseIn: rect), with: .color(.white))
+            }
+
+            // Face landmarks (debug overlay — cyan to stand out from the white body dots)
+            if let face = pose.faceLandmarks {
+                // Bounding box
+                let bb = face.boundingBox
+                let topLeft = visionToCanvas(CGPoint(x: bb.minX, y: bb.maxY), in: size)
+                let bottomRight = visionToCanvas(CGPoint(x: bb.maxX, y: bb.minY), in: size)
+                var boxPath = Path()
+                boxPath.addRect(CGRect(
+                    x: topLeft.x,
+                    y: topLeft.y,
+                    width: bottomRight.x - topLeft.x,
+                    height: bottomRight.y - topLeft.y
+                ))
+                context.stroke(boxPath, with: .color(.cyan.opacity(0.6)), lineWidth: 1)
+
+                // Landmark points
+                for point in face.points {
+                    let center = visionToCanvas(point, in: size)
+                    let rect = CGRect(x: center.x - 1.5, y: center.y - 1.5, width: 3, height: 3)
+                    context.fill(Path(ellipseIn: rect), with: .color(.cyan))
+                }
             }
         }
     }

@@ -12,9 +12,9 @@ enum AlertState: Equatable {
 final class NotificationManager: ObservableObject {
     @Published var alertState: AlertState = .none
 
-    var scoreThreshold: Float = 70.0
-    var alertDelay: TimeInterval = 30.0
-    var minimumAlertInterval: TimeInterval = 120.0
+    let scoreThreshold: Float = 70.0
+    let alertDelay: TimeInterval = 30.0
+    let minimumAlertInterval: TimeInterval = 120.0
 
     private var poorPostureStartTime: Date?
     private var lastAlertTime: Date?

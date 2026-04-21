@@ -11,7 +11,8 @@ import AudioToolbox
 
 // Guided-calibration timing constants. Kept at file scope so they're easy to tune.
 private let postVoicePause: Duration = .milliseconds(300)
-private let captureHoldAfterBeat: Duration = .milliseconds(800)
+private let captureHoldAfterBeat: Duration = .milliseconds(500)
+private let postCaptureMarimbaPause: Duration = .milliseconds(400)
 private let countdownBeatInterval: Duration = .seconds(1)
 
 struct ContentView: View {
@@ -222,6 +223,10 @@ struct ContentView: View {
                 try? await Task.sleep(for: captureHoldAfterBeat)
                 if Task.isCancelled { cleanupCalibration(); return }
                 countdown = nil
+
+                // Let the capture marimba note fully ring out before the next voice line
+                try? await Task.sleep(for: postCaptureMarimbaPause)
+                if Task.isCancelled { cleanupCalibration(); return }
             }
 
             // Commit all three and reset the sound coach so fresh calibration starts clean

@@ -39,10 +39,24 @@ struct PostureScore {
 struct PostureAngles {
     let earShoulderAngle: Float       // degrees from image-vertical
     let shoulderHipAngle: Float?      // nil if hip was occluded
-    // Head-yaw signature: (nose.x - shoulder.x) in Vision's normalized coords.
-    // Used at runtime to pick which calibrated baseline to score against.
-    // Nil if nose wasn't detected with enough confidence.
-    let yawSignature: Float?
+    // 2D head-position signature used at runtime to pick which calibrated baseline
+    // to score against. Nil if face wasn't detected.
+    let yawSignature: YawSignature?
+}
+
+// 2D head-position signature. `direction` captures left/right rotation (from the
+// face median-line position within the bbox). `frontality` captures how much of the
+// face is visible to the camera (from body-pose ear-confidence symmetry). Together
+// they separate head positions that would collapse in a single-axis yaw measure.
+struct YawSignature {
+    let direction: Float   // ~[-0.5, +0.5], 0 = face midline at bbox center
+    let frontality: Float  // [0, 1], 0 = deep profile (one ear), 1 = frontal (both ears equally visible)
+
+    func distance(to other: YawSignature) -> Float {
+        let dd = direction - other.direction
+        let df = frontality - other.frontality
+        return sqrtf(dd * dd + df * df)
+    }
 }
 
 // Three calibrated baselines corresponding to the user looking at the middle,
@@ -62,12 +76,16 @@ struct PostureAnalyzer {
     private nonisolated static let confidenceThreshold: Float = 0.3
     // How far (in degrees) from the baseline before the score hits zero.
     private nonisolated static let maxDeviation: Float = 15.0
-    // Max distance between current yawSignature and the nearest baseline's yawSignature
-    // before we treat the head as "unknown position" and pause scoring. Vision's
-    // normalized coords run 0–1, so 0.08 is roughly 8% of image width.
-    private nonisolated static let yawClassificationThreshold: Float = 0.08
+    // Max 2D Euclidean distance between current yawSignature and the nearest baseline
+    // before we treat the head as "unknown position" and pause scoring. Units combine
+    // direction (bbox-width fractions, ~[-0.5, 0.5]) and frontality ([0, 1]). 0.2 is
+    // a starting value — tune as baselines land in real data.
+    private nonisolated static let yawClassificationThreshold: Float = 0.2
 
-    nonisolated func computeAngles(_ observation: VNHumanBodyPoseObservation) -> PostureAngles? {
+    nonisolated func computeAngles(
+        _ observation: VNHumanBodyPoseObservation,
+        yawSignature: YawSignature?
+    ) -> PostureAngles? {
         guard let allPoints = try? observation.recognizedPoints(.all),
               let side = pickBestSide(allPoints)
         else { return nil }
@@ -75,18 +93,10 @@ struct PostureAnalyzer {
         let earShoulder = angleFromVertical(from: side.ear, to: side.shoulder)
         let shoulderHip = side.hip.map { angleFromVertical(from: side.shoulder, to: $0) }
 
-        // Yaw signature from nose position relative to the visible-side shoulder.
-        // Works because the nose moves in the image when the head rotates, while
-        // the shoulder stays put.
-        var yaw: Float? = nil
-        if let nose = allPoints[.nose], nose.confidence >= Self.confidenceThreshold {
-            yaw = Float(nose.location.x - side.shoulder.x)
-        }
-
         return PostureAngles(
             earShoulderAngle: earShoulder,
             shoulderHipAngle: shoulderHip,
-            yawSignature: yaw
+            yawSignature: yawSignature
         )
     }
 
@@ -110,7 +120,7 @@ struct PostureAnalyzer {
         var bestDist: Float = .greatestFiniteMagnitude
         for (i, candidate) in candidates.enumerated() {
             guard let baseYaw = candidate.baseline.yawSignature else { continue }
-            let dist = abs(currentYaw - baseYaw)
+            let dist = currentYaw.distance(to: baseYaw)
             if dist < bestDist {
                 bestDist = dist
                 bestIdx = i
