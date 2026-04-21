@@ -43,6 +43,9 @@ final class CameraManager: ObservableObject {
     }
 
     private func configureSession() {
+        // Don't let the capture session touch our audio session — SoundEffects already
+        // owns it and the camera reconfiguring it causes audio dropouts on first use.
+        session.automaticallyConfiguresApplicationAudioSession = false
         session.beginConfiguration()
         session.sessionPreset = .hd1280x720
 

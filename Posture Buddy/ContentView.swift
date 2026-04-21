@@ -53,12 +53,18 @@ struct ContentView: View {
                         .padding(.bottom, 12)
                 }
 
-                CalibrateButton(isCalibrated: poseEstimator.isCalibrated,
-                                countdown: countdown) {
-                    if countdown != nil {
-                        cancelCountdown()
+                Group {
+                    if poseEstimator.isTrackingReady {
+                        CalibrateButton(isCalibrated: poseEstimator.isCalibrated,
+                                        countdown: countdown) {
+                            if countdown != nil {
+                                cancelCountdown()
+                            } else {
+                                startCountdown()
+                            }
+                        }
                     } else {
-                        startCountdown()
+                        TrackingLoadingView()
                     }
                 }
                 .padding(.bottom, 30)
@@ -208,6 +214,21 @@ struct CalibrateButton: View {
     private var background: Color {
         if countdown != nil { return .red.opacity(0.8) }
         return isCalibrated ? Color.white.opacity(0.2) : Color.accentColor
+    }
+}
+
+struct TrackingLoadingView: View {
+    var body: some View {
+        HStack(spacing: 10) {
+            ProgressView()
+                .tint(.white)
+            Text("Initializing pose tracking…")
+                .font(.callout.weight(.medium))
+                .foregroundStyle(.white)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 12)
+        .background(Capsule().fill(Color.white.opacity(0.18)))
     }
 }
 

@@ -9,7 +9,7 @@ final class SoundEffects {
 
     private let engine = AVAudioEngine()
     private let player = AVAudioPlayerNode()
-    private let sampleRate: Double = 44100
+    private let sampleRate: Double
     private let format: AVAudioFormat
     private var audioSessionConfigured = false
 
@@ -27,6 +27,10 @@ final class SoundEffects {
     private static let captureFrequency: Float = 523.25 // C5 (octave tonic)
 
     private init() {
+        // Match the hardware sample rate so the mainMixerNode doesn't have to resample
+        // each buffer on the real-time audio thread (a hidden source of glitches).
+        let hwRate = AVAudioSession.sharedInstance().sampleRate
+        sampleRate = hwRate > 0 ? hwRate : 48000
         format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)!
         engine.attach(player)
         engine.connect(player, to: engine.mainMixerNode, format: format)
@@ -57,9 +61,9 @@ final class SoundEffects {
         try? engine.start()
         player.play()
 
-        // Warm up the render path with a silent buffer so the first real tone
+        // Warm up the render path with a half-second of silence so the first real tone
         // doesn't glitch as the audio pipeline spins up.
-        if let silence = Self.silentBuffer(format: format, duration: 0.05) {
+        if let silence = Self.silentBuffer(format: format, duration: 0.5) {
             player.scheduleBuffer(silence, at: nil, options: [], completionHandler: nil)
         }
 

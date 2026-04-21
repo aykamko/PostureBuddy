@@ -11,6 +11,7 @@ struct DetectedPose {
 final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     @Published var currentPose: DetectedPose?
     @Published var isCalibrated: Bool = false
+    @Published var isTrackingReady: Bool = false
 
     nonisolated private let analyzer = PostureAnalyzer()
     private let lastProcessedTime = OSAllocatedUnfairLock(initialState: CFTimeInterval(0))
@@ -100,9 +101,13 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
 
         let keypoints = extractKeypoints(from: observation)
         let pose = DetectedPose(keypoints: keypoints, score: finalScore)
+        let hasValidAngles = angles != nil
 
         Task { @MainActor in
             self.currentPose = pose
+            if hasValidAngles && !self.isTrackingReady {
+                self.isTrackingReady = true
+            }
         }
     }
 
