@@ -10,7 +10,16 @@
       "Bash(chmod +x *)",
       "Bash(\"/Users/aleks/projects/Posture Buddy/run.sh\" *)",
       "Bash(\"/Users/aleks/projects/Posture Buddy/run.sh\")",
-      "mcp__xcode__XcodeLS"
+      "mcp__xcode__XcodeLS",
+      "Bash(say -v '?')",
+      "Bash(say -v \"Matilda \\(Premium\\)\" -o \"1_lets_calibrate.aiff\" \"Let's calibrate. [[slnc 800]] Please sit up straight.\")",
+      "Bash(say -v \"Matilda \\(Premium\\)\" -o \"2_look_middle.aiff\"    \"First, look at the middle of your screen.\")",
+      "Bash(say -v \"Matilda \\(Premium\\)\" -o \"1_lets_calibrate.aiff\" \"Let's calibrate. [[slnc 400]] Please sit up straight.\")",
+      "Bash(mkdir -p \"/Users/aleks/projects/Posture Buddy/Posture Buddy/VoicePrompts\")",
+      "Bash(cp \"1_lets_calibrate.aiff\"  \"/Users/aleks/projects/Posture Buddy/Posture Buddy/VoicePrompts/lets_calibrate.aiff\")",
+      "Bash(cp \"2_look_middle.aiff\"     \"/Users/aleks/projects/Posture Buddy/Posture Buddy/VoicePrompts/look_middle.aiff\")",
+      "Bash(cp \"3_look_left.aiff\"       \"/Users/aleks/projects/Posture Buddy/Posture Buddy/VoicePrompts/look_left.aiff\")",
+      "Bash(cp \"4_look_right.aiff\"      \"/Users/aleks/projects/Posture Buddy/Posture Buddy/VoicePrompts/look_right.aiff\")"
     ]
   }
 }

@@ -171,14 +171,14 @@ struct ContentView: View {
 
             // Intro
             calibrationInstruction = "Sit up straight"
-            await VoiceGuide.shared.say("Let's calibrate. Sit up straight.")
+            await VoiceGuide.shared.say(.letsCalibrate)
             if Task.isCancelled { cleanupCalibration(); return }
 
             // Capture each of the three positions
-            let steps: [(instruction: String, voice: String)] = [
-                ("Look at the middle of your screen", "Look at the middle of your screen."),
-                ("Look at the left edge of your screen", "Now look at the left edge of your screen."),
-                ("Look at the right edge of your screen", "Now look at the right edge of your screen."),
+            let steps: [(instruction: String, voice: VoicePrompt)] = [
+                ("Look at the middle of your screen", .lookMiddle),
+                ("Look at the left edge of your screen", .lookLeft),
+                ("Look at the right edge of your screen", .lookRight),
             ]
 
             var snapshots: [PostureAngles] = []
@@ -206,7 +206,7 @@ struct ContentView: View {
                 SoundEffects.playCapture()
 
                 guard let angles = poseEstimator.snapshotCurrentAngles() else {
-                    await VoiceGuide.shared.say("Couldn't detect your pose. Please try again.")
+                    await VoiceGuide.shared.say(.poseNotDetected)
                     cleanupCalibration()
                     return
                 }
@@ -223,7 +223,7 @@ struct ContentView: View {
             soundCoach.reset()
 
             calibrationInstruction = "Calibration complete"
-            await VoiceGuide.shared.say("Calibration complete.")
+            await VoiceGuide.shared.say(.calibrationComplete)
             calibrationInstruction = nil
         }
     }

@@ -1,80 +1,91 @@
 import AVFoundation
 import Foundation
 
-/// Thin wrapper around `AVSpeechSynthesizer` that exposes an `async` `say(_:)`
-/// which returns when the utterance finishes (or is cancelled). Used to guide
-/// the user through multi-step calibration.
+/// Keys for the pre-recorded voice prompts bundled under `VoicePrompts/*.aiff`.
+/// Raw values match the filename (without extension).
+enum VoicePrompt: String, CaseIterable {
+    case letsCalibrate = "lets_calibrate"
+    case lookMiddle = "look_middle"
+    case lookLeft = "look_left"
+    case lookRight = "look_right"
+    case calibrationComplete = "calibration_complete"
+    case poseNotDetected = "pose_not_detected"
+}
+
+/// Plays pre-recorded voice prompts from the app bundle.
+/// Previously used `AVSpeechSynthesizer`, but iOS default TTS voices sound robotic
+/// and premium voices require user downloads. Instead we ship high-quality recordings
+/// generated on macOS with Matilda (Premium) via the `say` command.
 @MainActor
 final class VoiceGuide: NSObject {
     static let shared = VoiceGuide()
 
-    private let synthesizer = AVSpeechSynthesizer()
+    private var players: [VoicePrompt: AVAudioPlayer] = [:]
+    private var currentPlayer: AVAudioPlayer?
     private var finishContinuation: CheckedContinuation<Void, Never>?
-    // Resolved once on first use. Falls back gracefully if enhanced/premium aren't installed.
-    private lazy var preferredVoice: AVSpeechSynthesisVoice? = Self.pickBestVoice()
 
     private override init() {
         super.init()
-        synthesizer.delegate = self
     }
 
-    /// Picks the best available en-US voice: premium > enhanced > default.
-    /// Premium/enhanced voices require the user to download them via
-    /// Settings → Accessibility → Spoken Content → Voices.
-    private static func pickBestVoice() -> AVSpeechSynthesisVoice? {
-        let enUS = AVSpeechSynthesisVoice.speechVoices().filter { $0.language == "en-US" }
-        let qualityOrder: [AVSpeechSynthesisVoiceQuality] = [.premium, .enhanced, .default]
-        for quality in qualityOrder {
-            if let voice = enUS.first(where: { $0.quality == quality }) {
-                print("[VoiceGuide] using voice \(voice.name) quality=\(quality.label)")
-                return voice
-            }
-        }
-        print("[VoiceGuide] no en-US voice found; falling back to default")
-        return AVSpeechSynthesisVoice(language: "en-US")
-    }
-
-    /// Speaks the given text and suspends until the utterance is finished or cancelled.
-    func say(_ text: String, rate: Float = AVSpeechUtteranceDefaultSpeechRate * 0.95) async {
-        if synthesizer.isSpeaking {
-            synthesizer.stopSpeaking(at: .immediate)
-        }
+    /// Plays the given prompt and suspends until it finishes or is cancelled.
+    func say(_ prompt: VoicePrompt) async {
+        // Stop anything currently playing so we don't queue or overlap.
+        cancelCurrent()
+        guard let player = loadPlayer(for: prompt) else { return }
+        player.delegate = self
+        player.currentTime = 0
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             finishContinuation = cont
-            let utterance = AVSpeechUtterance(string: text)
-            utterance.rate = rate
-            utterance.voice = preferredVoice
-            synthesizer.speak(utterance)
+            currentPlayer = player
+            player.play()
         }
     }
 
     func cancel() {
-        synthesizer.stopSpeaking(at: .immediate)
+        cancelCurrent()
     }
-}
 
-private extension AVSpeechSynthesisVoiceQuality {
-    var label: String {
-        switch self {
-        case .default: return "default"
-        case .enhanced: return "enhanced"
-        case .premium: return "premium"
-        @unknown default: return "unknown"
+    private func cancelCurrent() {
+        currentPlayer?.stop()
+        currentPlayer = nil
+        if let continuation = finishContinuation {
+            finishContinuation = nil
+            continuation.resume()
+        }
+    }
+
+    @discardableResult
+    private func loadPlayer(for prompt: VoicePrompt) -> AVAudioPlayer? {
+        if let existing = players[prompt] { return existing }
+        guard let url = Bundle.main.url(forResource: prompt.rawValue, withExtension: "aiff") else {
+            print("[VoiceGuide] missing audio file: \(prompt.rawValue).aiff")
+            return nil
+        }
+        do {
+            let player = try AVAudioPlayer(contentsOf: url)
+            player.prepareToPlay()
+            players[prompt] = player
+            return player
+        } catch {
+            print("[VoiceGuide] failed to load \(prompt.rawValue): \(error)")
+            return nil
         }
     }
 }
 
-extension VoiceGuide: AVSpeechSynthesizerDelegate {
-    nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
-        Task { @MainActor in self.resumeContinuation() }
+extension VoiceGuide: AVAudioPlayerDelegate {
+    nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        Task { @MainActor in
+            self.handlePlaybackComplete()
+        }
     }
 
-    nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
-        Task { @MainActor in self.resumeContinuation() }
-    }
-
-    private func resumeContinuation() {
-        finishContinuation?.resume()
-        finishContinuation = nil
+    private func handlePlaybackComplete() {
+        currentPlayer = nil
+        if let continuation = finishContinuation {
+            finishContinuation = nil
+            continuation.resume()
+        }
     }
 }
