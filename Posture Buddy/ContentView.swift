@@ -9,6 +9,11 @@ import SwiftUI
 import UIKit
 import AudioToolbox
 
+// Guided-calibration timing constants. Kept at file scope so they're easy to tune.
+private let postVoicePause: Duration = .milliseconds(300)
+private let captureHoldAfterBeat: Duration = .milliseconds(800)
+private let countdownBeatInterval: Duration = .seconds(1)
+
 struct ContentView: View {
     @StateObject private var cameraManager = CameraManager()
     @StateObject private var poseEstimator = PoseEstimator()
@@ -18,7 +23,6 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var isUpsideDown: Bool = UIDevice.current.orientation == .portraitUpsideDown
     @State private var countdown: Int? = nil
-    @State private var isPriming = false
     @State private var calibrationInstruction: String? = nil
     @State private var countdownTask: Task<Void, Never>? = nil
     @State private var trackingTimeoutTask: Task<Void, Never>? = nil
@@ -28,14 +32,13 @@ struct ContentView: View {
     private let trackingTimeoutSeconds: Double = 45
 
     private var isCalibrating: Bool {
-        isPriming || countdown != nil || calibrationInstruction != nil
+        countdown != nil || calibrationInstruction != nil
     }
 
     var body: some View {
         mainContent
         .animation(.easeInOut(duration: 0.3), value: isUpsideDown)
         .animation(.easeInOut(duration: 0.2), value: countdown)
-        .animation(.easeInOut(duration: 0.2), value: isPriming)
         .animation(.easeInOut(duration: 0.2), value: calibrationInstruction)
         .animation(.easeInOut(duration: 0.2), value: showTrackingFailedAlert)
         .task {
@@ -137,8 +140,7 @@ struct ContentView: View {
             if isCalibrating {
                 GuidedCalibrationOverlay(
                     instruction: calibrationInstruction,
-                    countdown: countdown,
-                    isPriming: isPriming
+                    countdown: countdown
                 )
                 .rotationEffect(isUpsideDown ? .degrees(180) : .zero)
                 .allowsHitTesting(false)
@@ -161,24 +163,24 @@ struct ContentView: View {
 
     private func startGuidedCalibration() {
         countdownTask?.cancel()
-        isPriming = true
-        SoundEffects.prime()
+        calibrationInstruction = "Get ready…"
         countdownTask = Task { @MainActor in
-            // Priming: warm up audio pipeline
-            try? await Task.sleep(for: .seconds(SoundEffects.primeDuration))
+            // Priming: warm up audio pipeline. Awaitable — returns after primeDuration.
+            await SoundEffects.prime()
             if Task.isCancelled { cleanupCalibration(); return }
-            isPriming = false
 
             // Intro
             calibrationInstruction = "Sit up straight"
             await VoiceGuide.shared.say(.letsCalibrate)
             if Task.isCancelled { cleanupCalibration(); return }
+            try? await Task.sleep(for: postVoicePause)
+            if Task.isCancelled { cleanupCalibration(); return }
 
             // Capture each of the three positions
             let steps: [(instruction: String, voice: VoicePrompt)] = [
                 ("Look at the middle of your screen", .lookMiddle),
-                ("Look at the left edge of your screen", .lookLeft),
-                ("Look at the right edge of your screen", .lookRight),
+                ("Look at the left of your screen", .lookLeft),
+                ("Look at the right of your screen", .lookRight),
             ]
 
             var snapshots: [PostureAngles] = []
@@ -187,19 +189,23 @@ struct ContentView: View {
                 await VoiceGuide.shared.say(step.voice)
                 if Task.isCancelled { cleanupCalibration(); return }
 
+                // Small breathing room between the voice line ending and the first tick
+                try? await Task.sleep(for: postVoicePause)
+                if Task.isCancelled { cleanupCalibration(); return }
+
                 // 3-beat countdown with marimba ticks (3, 2, 1=capture)
                 // Tick indices 0 and 1 for beats at count=3, count=2; capture note at count=1
                 countdown = 3
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
                 SoundEffects.playTick(index: 0)
 
-                try? await Task.sleep(for: .seconds(1))
+                try? await Task.sleep(for: countdownBeatInterval)
                 if Task.isCancelled { cleanupCalibration(); return }
                 countdown = 2
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
                 SoundEffects.playTick(index: 1)
 
-                try? await Task.sleep(for: .seconds(1))
+                try? await Task.sleep(for: countdownBeatInterval)
                 if Task.isCancelled { cleanupCalibration(); return }
                 countdown = 1
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
@@ -213,7 +219,7 @@ struct ContentView: View {
                 snapshots.append(angles)
 
                 // Brief pause on "1" so the capture moment is visible
-                try? await Task.sleep(for: .seconds(0.5))
+                try? await Task.sleep(for: captureHoldAfterBeat)
                 if Task.isCancelled { cleanupCalibration(); return }
                 countdown = nil
             }
@@ -236,7 +242,6 @@ struct ContentView: View {
 
     private func cleanupCalibration() {
         VoiceGuide.shared.cancel()
-        isPriming = false
         countdown = nil
         calibrationInstruction = nil
     }
@@ -382,37 +387,26 @@ struct AlertOverlay: View {
 }
 
 /// Unified overlay for the guided-calibration flow. Shows:
-///   • A spinner + "Get ready…" while priming the audio pipeline
-///   • The current instruction (e.g., "Look at the middle of your screen")
+///   • The current instruction (e.g., "Get ready…", "Look at the middle of your screen")
 ///   • A large countdown number (3 / 2 / 1) during each per-position hold
 struct GuidedCalibrationOverlay: View {
     let instruction: String?
     let countdown: Int?
-    let isPriming: Bool
 
     var body: some View {
         VStack(spacing: 18) {
-            if isPriming {
-                ProgressView()
-                    .tint(.white)
-                    .controlSize(.large)
-                Text("Get ready…")
-                    .font(.title3.weight(.medium))
-                    .foregroundStyle(.white.opacity(0.9))
-            } else {
-                if let instruction {
-                    Text(instruction)
-                        .font(countdown == nil ? .title.weight(.semibold) : .title3.weight(.medium))
-                        .foregroundStyle(.white)
-                        .multilineTextAlignment(.center)
-                }
-                if let countdown {
-                    Text("\(countdown)")
-                        .font(.system(size: 140, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white)
-                        .contentTransition(.numericText(countsDown: true))
-                        .id(countdown)
-                }
+            if let instruction {
+                Text(instruction)
+                    .font(countdown == nil ? .title.weight(.semibold) : .title3.weight(.medium))
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
+            }
+            if let countdown {
+                Text("\(countdown)")
+                    .font(.system(size: 140, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .contentTransition(.numericText(countsDown: true))
+                    .id(countdown)
             }
         }
         .padding(32)

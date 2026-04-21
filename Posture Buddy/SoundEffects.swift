@@ -51,8 +51,11 @@ final class SoundEffects {
     }
 
     /// Primes the render thread with a silent buffer so the first real tone plays cleanly.
-    static func prime() {
+    /// Awaitable — returns after the silence has played out (roughly `primeDuration`),
+    /// so callers don't need to maintain their own sleep/state.
+    static func prime() async {
         shared.primeInternal()
+        try? await Task.sleep(for: .seconds(primeDuration))
     }
 
     static func playTick(index: Int) {
@@ -148,15 +151,16 @@ final class SoundEffects {
         return buffer
     }
 
-    /// Synthesizes two short sine-based notes back-to-back with a small gap.
-    /// Used for posture-state feedback (descending = slouch, ascending = recovery).
-    /// Simpler timbre than marimba (no clink harmonic) — meant to be subtle.
+    /// Synthesizes two short notes back-to-back with a small gap. Used for posture-state
+    /// feedback (descending = slouch, ascending = recovery).
+    /// Iphone speakers have poor response below ~250Hz, so we boost mid-frequency harmonics
+    /// for perceived loudness while keeping the low fundamental for character.
     private static func generateBeepPair(
         firstFreq: Float,
         secondFreq: Float,
-        noteDuration: Float = 0.18,
+        noteDuration: Float = 0.25,
         gap: Float = 0.03,
-        amplitude: Float = 2.0,
+        amplitude: Float = 1.0,
         format: AVAudioFormat,
         sampleRate: Double
     ) -> AVAudioPCMBuffer? {
@@ -172,27 +176,32 @@ final class SoundEffects {
         let gapFrames = Int(gap * Float(sampleRate))
         let twoPiOverSR = 2.0 * Float.pi / Float(sampleRate)
 
+        // Harmonic coefficients. The 3rd harmonic gives phone-speaker presence.
+        // Sum of coefficients = 1.55 → divide to keep output in [-1, 1] at amplitude 1.0.
+        let h1: Float = 1.0
+        let h2Coef: Float = 0.3
+        let h3Coef: Float = 0.25
+        let normalizer: Float = h1 + h2Coef + h3Coef
+
+        func noteSample(localIdx: Int, frequency: Float) -> Float {
+            let t = Float(localIdx) / Float(sampleRate)
+            let phase = twoPiOverSR * frequency * Float(localIdx)
+            // Fade-in 20ms, fade-out 30ms to avoid clicks, plus slower exp decay for sustain.
+            let fadeIn = min(1, t / 0.02)
+            let fadeOut = min(1, (noteDuration - t) / 0.03)
+            let env = fadeIn * fadeOut * expf(-1.5 * t / noteDuration)
+            let fundamental = h1 * sinf(phase)
+            let h2 = h2Coef * sinf(phase * 2.0)
+            let h3 = h3Coef * sinf(phase * 3.0)
+            return amplitude * env * (fundamental + h2 + h3) / normalizer
+        }
+
         for i in 0..<Int(frameCount) {
             var sample: Float = 0
             if i < noteFrames {
-                let localIdx = i
-                let t = Float(localIdx) / Float(sampleRate)
-                let phase = twoPiOverSR * firstFreq * Float(localIdx)
-                // Softer envelope than marimba — shaped like a gentle beep (fade-in + exp decay)
-                let fadeIn = min(1, t / 0.02)
-                let env = fadeIn * expf(-3.0 * t / noteDuration)
-                let fundamental = sinf(phase)
-                let h2 = 0.3 * sinf(phase * 2.0)
-                sample = amplitude * env * (fundamental + h2)
+                sample = noteSample(localIdx: i, frequency: firstFreq)
             } else if i >= noteFrames + gapFrames {
-                let localIdx = i - (noteFrames + gapFrames)
-                let t = Float(localIdx) / Float(sampleRate)
-                let phase = twoPiOverSR * secondFreq * Float(localIdx)
-                let fadeIn = min(1, t / 0.02)
-                let env = fadeIn * expf(-3.0 * t / noteDuration)
-                let fundamental = sinf(phase)
-                let h2 = 0.3 * sinf(phase * 2.0)
-                sample = amplitude * env * (fundamental + h2)
+                sample = noteSample(localIdx: i - (noteFrames + gapFrames), frequency: secondFreq)
             }
             data[i] = sample
         }

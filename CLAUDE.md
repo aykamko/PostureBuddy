@@ -17,21 +17,40 @@ iOS app that monitors sitting posture in real time using the front camera. The u
 - Hip often isn't visible (desk occludes it); scoring falls back to ear-shoulder alone when that's the case.
 
 ### Guided calibration flow
-- Triggered by **Set Baseline Posture** (or Recalibrate). Uses voice + marimba countdown:
+- Triggered by **Set Baseline Posture** (or Recalibrate). Uses pre-recorded voice + marimba countdown:
   1. Audio pipeline prime (1s silent buffer) + "Get ready…" spinner
-  2. Voice: *"Let's calibrate. Sit up straight."*
-  3. For each of middle / left / right:
-     - Voice: *"Look at the [middle | left edge | right edge] of your screen."*
+  2. Voice: *"Let's calibrate. Please sit up straight."*
+  3. For middle / left / right:
+     - Voice: *"First, look at the middle of your screen."* → *"Next, look at the left of your screen."* → *"Last, look at the right of your screen."*
      - 3-beat marimba countdown (3, 2, 1) with tick + capture sounds
      - Snapshot `PostureAngles` at count=1
-  4. Voice: *"Calibration complete."*
+  4. Voice: *"Calibration is complete."*
 - Cancel button (the calibrate button goes red during calibration) stops voice, cancels the task, and reverts — previous baselines stay intact.
 - If `snapshotCurrentAngles()` returns nil at any capture moment (no valid pose), the flow aborts with *"Couldn't detect your pose. Please try again."*
 
-### Voice guidance
-- `VoiceGuide.shared` is a thin wrapper around `AVSpeechSynthesizer` with an async `say(_:)` that returns when the utterance finishes (uses `AVSpeechSynthesizerDelegate.didFinish` + `CheckedContinuation`).
-- Rate slightly slower than default for clarity (`AVSpeechUtteranceDefaultSpeechRate * 0.95`).
-- Plays through the existing `.playback` + `.mixWithOthers` audio session — no special setup needed.
+### Voice guidance — pre-recorded, not TTS
+- Originally used `AVSpeechSynthesizer`, but iOS default TTS voices sound robotic and premium voices require per-user downloads from Settings → Accessibility. Apple also walls off Siri's voice from third-party apps entirely (Siri voice downloads are not exposed via `AVSpeechSynthesisVoice.speechVoices()` or the `say` command).
+- Solution: ship **pre-recorded `.aiff` files** in the bundle, one per prompt. `VoiceGuide.shared.say(_: VoicePrompt)` plays the matching file via `AVAudioPlayer` (delegate callback resumes a `CheckedContinuation` when done).
+- Recordings were generated with **ElevenLabs** (Clara voice). Raw clips are stored outside the bundle at `voice-samples/` (ignored by Xcode); the chopped segments live in `Posture Buddy/VoicePrompts/` and are auto-included via the file-system-synchronized group.
+- `VoicePrompt` is a `String`-backed `CaseIterable` enum whose raw values match the filenames (e.g., `.lookMiddle` → `look_middle.aiff`).
+- Players are lazily loaded and cached on first use; subsequent plays are instant.
+
+### Re-recording the voice prompts
+The script:
+```
+Let's calibrate. Please sit up straight.        → lets_calibrate.aiff
+First, look at the middle of your screen.       → look_middle.aiff
+Next, look at the left of your screen.          → look_left.aiff
+Last, look at the right of your screen.         → look_right.aiff
+Calibration is complete.                        → calibration_complete.aiff
+Couldn't detect your pose. Please try again.    → pose_not_detected.aiff
+```
+
+Workflow:
+1. Paste the script into ElevenLabs and export as one mp3 (or chop each line separately in ElevenLabs for better per-phrase intonation — the hand-chopped files ended up sounding more natural than auto-chopped).
+2. If auto-chopping a single mp3: `ffmpeg -i in.mp3 -af silencedetect=noise=-35dB:d=0.4 -f null -` to find silence boundaries, then split with `ffmpeg -ss START -to END -i in.mp3 -c:a pcm_s16be out.aiff`.
+3. Otherwise convert each mp3 to aiff: `ffmpeg -i in.mp3 -c:a pcm_s16be out.aiff`.
+4. Replace files in `Posture Buddy/VoicePrompts/`. Filenames must match `VoicePrompt.rawValue` exactly.
 
 ### Orientation: portrait + portrait-upside-down
 - Supported orientations (Info.plist-equivalent in `project.pbxproj`): `UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown`.
@@ -75,7 +94,14 @@ Posture Buddy/
 ├── PostureOverlayView.swift     SwiftUI Canvas drawing the skeleton on top of the camera preview
 ├── NotificationManager.swift    Tracks poor-posture duration; fires haptic + local notification
 ├── PostureSoundCoach.swift      Short-horizon (5s) grade-transition sounds (descending on slouch, ascending on recovery)
-├── VoiceGuide.swift             AVSpeechSynthesizer wrapper with async say(_:) for guided calibration
+├── VoiceGuide.swift             Plays bundled .aiff prompts via AVAudioPlayer; keyed by VoicePrompt enum
+├── VoicePrompts/                Bundled pre-recorded calibration audio (ElevenLabs "Clara")
+│   ├── lets_calibrate.aiff
+│   ├── look_middle.aiff
+│   ├── look_left.aiff
+│   ├── look_right.aiff
+│   ├── calibration_complete.aiff
+│   └── pose_not_detected.aiff
 └── SoundEffects.swift           Synthesized marimba tones + beep pairs for calibration and coaching
 ```
 
