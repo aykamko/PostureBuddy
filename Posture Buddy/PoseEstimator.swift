@@ -21,25 +21,30 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
 
     // Most-recent per-frame angles (for calibration capture)
     private let currentAngles = OSAllocatedUnfairLock<PostureAngles?>(initialState: nil)
-    // Calibrated reference; nil until user taps Calibrate
-    private let baseline = OSAllocatedUnfairLock<PostureAngles?>(initialState: nil)
+    // Calibrated references (middle / left / right); nil until user completes calibration
+    private let baselines = OSAllocatedUnfairLock<PostureBaselines?>(initialState: nil)
 
     func updateOrientation(_ orientation: CGImagePropertyOrientation) {
         visionOrientation.withLock { $0 = orientation }
     }
 
-    // Called from UI when user taps Calibrate. Snapshots the last observed angles as baseline.
-    func calibrate() {
-        let snapshot = currentAngles.withLock { $0 }
-        guard let snapshot else { return }
-        baseline.withLock { $0 = snapshot }
+    /// Returns the most-recent frame's computed angles, or nil if the current frame
+    /// didn't yield a valid pose. Used by the calibration flow to snapshot per-position.
+    func snapshotCurrentAngles() -> PostureAngles? {
+        currentAngles.withLock { $0 }
+    }
+
+    /// Commits the three-position baselines (after guided calibration completes).
+    func calibrate(middle: PostureAngles, left: PostureAngles, right: PostureAngles) {
+        let b = PostureBaselines(middle: middle, left: left, right: right)
+        baselines.withLock { $0 = b }
         smoothedScore.withLock { $0 = 100 }
         isCalibrated = true
-        print("[Posture] calibrated: earShoulder=\(snapshot.earShoulderAngle)° shoulderHip=\(snapshot.shoulderHipAngle.map { "\($0)°" } ?? "nil")")
+        print("[Posture] calibrated 3 positions  middle.yaw=\(middle.yawSignature.map { String(format: "%.3f", $0) } ?? "nil")  left.yaw=\(left.yawSignature.map { String(format: "%.3f", $0) } ?? "nil")  right.yaw=\(right.yawSignature.map { String(format: "%.3f", $0) } ?? "nil")")
     }
 
     func clearCalibration() {
-        baseline.withLock { $0 = nil }
+        baselines.withLock { $0 = nil }
         isCalibrated = false
     }
 
@@ -73,12 +78,11 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
         let angles = analyzer.computeAngles(observation)
         currentAngles.withLock { $0 = angles }
 
-        let currentBaseline = baseline.withLock { $0 }
+        let currentBaselines = baselines.withLock { $0 }
 
-        // Compute score only if calibrated
+        // Compute score only if calibrated AND analyzer can classify the head position
         let finalScore: PostureScore?
-        if let angles, let currentBaseline {
-            let raw = analyzer.score(current: angles, baseline: currentBaseline)
+        if let angles, let currentBaselines, let raw = analyzer.score(current: angles, baselines: currentBaselines) {
             let smoothed = smoothedScore.withLock { current in
                 let new = 0.8 * current + 0.2 * raw.value
                 current = new
@@ -92,6 +96,8 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
         if shouldLog {
             if let finalScore {
                 print("[Posture] score=\(String(format: "%.1f", finalScore.value)) [\(finalScore.grade.label)]")
+            } else if currentBaselines != nil && angles != nil {
+                print("[Posture] paused — head position not recognized")
             } else if angles != nil {
                 print("[Posture] angles available; awaiting calibration")
             } else {

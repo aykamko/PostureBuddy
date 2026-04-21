@@ -19,18 +19,24 @@ struct ContentView: View {
     @State private var isUpsideDown: Bool = UIDevice.current.orientation == .portraitUpsideDown
     @State private var countdown: Int? = nil
     @State private var isPriming = false
+    @State private var calibrationInstruction: String? = nil
     @State private var countdownTask: Task<Void, Never>? = nil
     @State private var trackingTimeoutTask: Task<Void, Never>? = nil
     @State private var showTrackingFailedAlert = false
 
-    private let countdownDuration = 5
+    private let perPositionCountdown = 3  // 3-beat countdown per position (3, 2, 1=capture)
     private let trackingTimeoutSeconds: Double = 45
+
+    private var isCalibrating: Bool {
+        isPriming || countdown != nil || calibrationInstruction != nil
+    }
 
     var body: some View {
         mainContent
         .animation(.easeInOut(duration: 0.3), value: isUpsideDown)
         .animation(.easeInOut(duration: 0.2), value: countdown)
         .animation(.easeInOut(duration: 0.2), value: isPriming)
+        .animation(.easeInOut(duration: 0.2), value: calibrationInstruction)
         .animation(.easeInOut(duration: 0.2), value: showTrackingFailedAlert)
         .task {
             poseEstimator.updateOrientation(visionOrientation(for: UIDevice.current.orientation))
@@ -67,7 +73,7 @@ struct ContentView: View {
             case .background, .inactive:
                 UIApplication.shared.isIdleTimerDisabled = false
                 cameraManager.stop()
-                cancelCountdown()
+                cancelCalibration()
                 trackingTimeoutTask?.cancel()
                 notificationManager.update(score: nil)
                 soundCoach.reset()
@@ -113,11 +119,11 @@ struct ContentView: View {
                 Group {
                     if poseEstimator.isTrackingReady {
                         CalibrateButton(isCalibrated: poseEstimator.isCalibrated,
-                                        isActive: isPriming || countdown != nil) {
-                            if isPriming || countdown != nil {
-                                cancelCountdown()
+                                        isActive: isCalibrating) {
+                            if isCalibrating {
+                                cancelCalibration()
                             } else {
-                                startCountdown()
+                                startGuidedCalibration()
                             }
                         }
                     } else {
@@ -128,16 +134,15 @@ struct ContentView: View {
             }
             .rotationEffect(isUpsideDown ? .degrees(180) : .zero)
 
-            if isPriming {
-                PrimingOverlay()
-                    .rotationEffect(isUpsideDown ? .degrees(180) : .zero)
-                    .allowsHitTesting(false)
-                    .transition(.opacity)
-            } else if let countdown {
-                CountdownOverlay(value: countdown)
-                    .rotationEffect(isUpsideDown ? .degrees(180) : .zero)
-                    .allowsHitTesting(false)
-                    .transition(.opacity)
+            if isCalibrating {
+                GuidedCalibrationOverlay(
+                    instruction: calibrationInstruction,
+                    countdown: countdown,
+                    isPriming: isPriming
+                )
+                .rotationEffect(isUpsideDown ? .degrees(180) : .zero)
+                .allowsHitTesting(false)
+                .transition(.opacity)
             }
 
             if showTrackingFailedAlert {
@@ -154,48 +159,86 @@ struct ContentView: View {
         }
     }
 
-    private func startCountdown() {
+    private func startGuidedCalibration() {
         countdownTask?.cancel()
-        // Phase 1: prime the audio pipeline. Show spinner, no haptic/sound yet.
         isPriming = true
         SoundEffects.prime()
         countdownTask = Task { @MainActor in
+            // Priming: warm up audio pipeline
             try? await Task.sleep(for: .seconds(SoundEffects.primeDuration))
-            if Task.isCancelled { isPriming = false; return }
+            if Task.isCancelled { cleanupCalibration(); return }
             isPriming = false
 
-            // Phase 2: actual countdown. Beat 1 — "5" on screen, lowest pitch.
-            countdown = countdownDuration
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            SoundEffects.playTick(index: 0)
+            // Intro
+            calibrationInstruction = "Sit up straight"
+            await VoiceGuide.shared.say("Let's calibrate. Sit up straight.")
+            if Task.isCancelled { cleanupCalibration(); return }
 
-            // Beats 2-4 — ticks at count 4, 3, 2
-            for remaining in stride(from: countdownDuration - 1, through: 2, by: -1) {
-                try? await Task.sleep(for: .seconds(1))
-                if Task.isCancelled { return }
-                countdown = remaining
+            // Capture each of the three positions
+            let steps: [(instruction: String, voice: String)] = [
+                ("Look at the middle of your screen", "Look at the middle of your screen."),
+                ("Look at the left edge of your screen", "Now look at the left edge of your screen."),
+                ("Look at the right edge of your screen", "Now look at the right edge of your screen."),
+            ]
+
+            var snapshots: [PostureAngles] = []
+            for step in steps {
+                calibrationInstruction = step.instruction
+                await VoiceGuide.shared.say(step.voice)
+                if Task.isCancelled { cleanupCalibration(); return }
+
+                // 3-beat countdown with marimba ticks (3, 2, 1=capture)
+                // Tick indices 0 and 1 for beats at count=3, count=2; capture note at count=1
+                countdown = 3
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                SoundEffects.playTick(index: countdownDuration - remaining)
+                SoundEffects.playTick(index: 0)
+
+                try? await Task.sleep(for: .seconds(1))
+                if Task.isCancelled { cleanupCalibration(); return }
+                countdown = 2
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                SoundEffects.playTick(index: 1)
+
+                try? await Task.sleep(for: .seconds(1))
+                if Task.isCancelled { cleanupCalibration(); return }
+                countdown = 1
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+                SoundEffects.playCapture()
+
+                guard let angles = poseEstimator.snapshotCurrentAngles() else {
+                    await VoiceGuide.shared.say("Couldn't detect your pose. Please try again.")
+                    cleanupCalibration()
+                    return
+                }
+                snapshots.append(angles)
+
+                // Brief pause on "1" so the capture moment is visible
+                try? await Task.sleep(for: .seconds(0.5))
+                if Task.isCancelled { cleanupCalibration(); return }
+                countdown = nil
             }
-            // Beat 5 — "1" on screen, capture note (A), calibrate
-            try? await Task.sleep(for: .seconds(1))
-            if Task.isCancelled { return }
-            countdown = 1
-            UINotificationFeedbackGenerator().notificationOccurred(.success)
-            SoundEffects.playCapture()
-            poseEstimator.calibrate()
+
+            // Commit all three and reset the sound coach so fresh calibration starts clean
+            poseEstimator.calibrate(middle: snapshots[0], left: snapshots[1], right: snapshots[2])
             soundCoach.reset()
-            // Hold "1" briefly so the capture moment is visible, then dismiss
-            try? await Task.sleep(for: .seconds(0.6))
-            if !Task.isCancelled { countdown = nil }
+
+            calibrationInstruction = "Calibration complete"
+            await VoiceGuide.shared.say("Calibration complete.")
+            calibrationInstruction = nil
         }
     }
 
-    private func cancelCountdown() {
+    private func cancelCalibration() {
         countdownTask?.cancel()
         countdownTask = nil
-        countdown = nil
+        cleanupCalibration()
+    }
+
+    private func cleanupCalibration() {
+        VoiceGuide.shared.cancel()
         isPriming = false
+        countdown = nil
+        calibrationInstruction = nil
     }
 
     private func startTrackingTimeout() {
@@ -338,42 +381,46 @@ struct AlertOverlay: View {
     }
 }
 
-struct PrimingOverlay: View {
-    var body: some View {
-        VStack(spacing: 16) {
-            ProgressView()
-                .tint(.white)
-                .controlSize(.large)
-            Text("Get ready…")
-                .font(.title3.weight(.medium))
-                .foregroundStyle(.white.opacity(0.9))
-        }
-        .padding(40)
-        .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 28))
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(.black.opacity(0.35))
-    }
-}
-
-struct CountdownOverlay: View {
-    let value: Int
+/// Unified overlay for the guided-calibration flow. Shows:
+///   • A spinner + "Get ready…" while priming the audio pipeline
+///   • The current instruction (e.g., "Look at the middle of your screen")
+///   • A large countdown number (3 / 2 / 1) during each per-position hold
+struct GuidedCalibrationOverlay: View {
+    let instruction: String?
+    let countdown: Int?
+    let isPriming: Bool
 
     var body: some View {
-        VStack(spacing: 12) {
-            Text("\(value)")
-                .font(.system(size: 160, weight: .bold, design: .rounded))
-                .foregroundStyle(.white)
-                .contentTransition(.numericText(countsDown: true))
-                .id(value)
-            Text("Hold your best posture")
-                .font(.title3.weight(.medium))
-                .foregroundStyle(.white.opacity(0.85))
+        VStack(spacing: 18) {
+            if isPriming {
+                ProgressView()
+                    .tint(.white)
+                    .controlSize(.large)
+                Text("Get ready…")
+                    .font(.title3.weight(.medium))
+                    .foregroundStyle(.white.opacity(0.9))
+            } else {
+                if let instruction {
+                    Text(instruction)
+                        .font(countdown == nil ? .title.weight(.semibold) : .title3.weight(.medium))
+                        .foregroundStyle(.white)
+                        .multilineTextAlignment(.center)
+                }
+                if let countdown {
+                    Text("\(countdown)")
+                        .font(.system(size: 140, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .contentTransition(.numericText(countsDown: true))
+                        .id(countdown)
+                }
+            }
         }
-        .padding(40)
-        .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 28))
+        .padding(32)
+        .frame(maxWidth: 340)
+        .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 24))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(.black.opacity(0.35))
-        .animation(.easeInOut(duration: 0.25), value: value)
+        .background(.black.opacity(0.3))
+        .animation(.easeInOut(duration: 0.2), value: countdown)
     }
 }
 

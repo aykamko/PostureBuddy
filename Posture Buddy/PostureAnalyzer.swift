@@ -34,17 +34,34 @@ struct PostureScore {
     }
 }
 
-// A snapshot of the side-profile angles for one frame.
-// Baseline = same struct captured when the user taps Calibrate.
+// A snapshot of the side-profile angles + head-yaw signature for one frame.
+// Baseline = same struct captured during calibration at one head position.
 struct PostureAngles {
     let earShoulderAngle: Float       // degrees from image-vertical
     let shoulderHipAngle: Float?      // nil if hip was occluded
+    // Head-yaw signature: (nose.x - shoulder.x) in Vision's normalized coords.
+    // Used at runtime to pick which calibrated baseline to score against.
+    // Nil if nose wasn't detected with enough confidence.
+    let yawSignature: Float?
+}
+
+// Three calibrated baselines corresponding to the user looking at the middle,
+// left, and right of their screen. At runtime the current frame's yawSignature
+// is matched to the closest baseline.
+struct PostureBaselines {
+    let middle: PostureAngles
+    let left: PostureAngles
+    let right: PostureAngles
 }
 
 struct PostureAnalyzer {
     private nonisolated static let confidenceThreshold: Float = 0.3
     // How far (in degrees) from the baseline before the score hits zero.
     private nonisolated static let maxDeviation: Float = 15.0
+    // Max distance between current yawSignature and the nearest baseline's yawSignature
+    // before we treat the head as "unknown position" and pause scoring. Vision's
+    // normalized coords run 0–1, so 0.08 is roughly 8% of image width.
+    private nonisolated static let yawClassificationThreshold: Float = 0.08
 
     nonisolated func computeAngles(_ observation: VNHumanBodyPoseObservation) -> PostureAngles? {
         guard let allPoints = try? observation.recognizedPoints(.all),
@@ -53,17 +70,52 @@ struct PostureAnalyzer {
 
         let earShoulder = angleFromVertical(from: side.ear, to: side.shoulder)
         let shoulderHip = side.hip.map { angleFromVertical(from: side.shoulder, to: $0) }
-        return PostureAngles(earShoulderAngle: earShoulder, shoulderHipAngle: shoulderHip)
+
+        // Yaw signature from nose position relative to the visible-side shoulder.
+        // Works because the nose moves in the image when the head rotates, while
+        // the shoulder stays put.
+        var yaw: Float? = nil
+        if let nose = allPoints[.nose], nose.confidence >= Self.confidenceThreshold {
+            yaw = Float(nose.location.x - side.shoulder.x)
+        }
+
+        return PostureAngles(
+            earShoulderAngle: earShoulder,
+            shoulderHipAngle: shoulderHip,
+            yawSignature: yaw
+        )
     }
 
-    // Score = how close current posture is to the calibrated baseline.
-    // Ear-shoulder deviation weighted 60%, shoulder-hip 40% (when available).
-    nonisolated func score(current: PostureAngles, baseline: PostureAngles) -> PostureScore {
-        let earDev = abs(current.earShoulderAngle - baseline.earShoulderAngle)
+    /// Matches the current frame to one of three calibrated baselines (middle / left / right)
+    /// using yawSignature, then scores against that baseline. Returns nil when:
+    ///   • current frame has no yawSignature (nose not detected), or
+    ///   • current yaw is too far from all three baselines (head in an uncalibrated pose)
+    /// Callers treat nil as "pause scoring".
+    nonisolated func score(current: PostureAngles, baselines: PostureBaselines) -> PostureScore? {
+        guard let currentYaw = current.yawSignature else { return nil }
+
+        let candidates = [baselines.middle, baselines.left, baselines.right]
+        var bestIdx: Int?
+        var bestDist: Float = .greatestFiniteMagnitude
+        for (i, candidate) in candidates.enumerated() {
+            guard let baseYaw = candidate.yawSignature else { continue }
+            let dist = abs(currentYaw - baseYaw)
+            if dist < bestDist {
+                bestDist = dist
+                bestIdx = i
+            }
+        }
+
+        guard let bestIdx, bestDist <= Self.yawClassificationThreshold else {
+            return nil
+        }
+        let matched = candidates[bestIdx]
+
+        let earDev = abs(current.earShoulderAngle - matched.earShoulderAngle)
         let earScore = max(0, 1.0 - earDev / Self.maxDeviation)
 
         let value: Float
-        if let curHip = current.shoulderHipAngle, let baseHip = baseline.shoulderHipAngle {
+        if let curHip = current.shoulderHipAngle, let baseHip = matched.shoulderHipAngle {
             let hipDev = abs(curHip - baseHip)
             let hipScore = max(0, 1.0 - hipDev / Self.maxDeviation)
             value = (0.6 * earScore + 0.4 * hipScore) * 100

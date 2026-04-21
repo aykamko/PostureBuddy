@@ -9,11 +9,29 @@ iOS app that monitors sitting posture in real time using the front camera. The u
 - The **3D variant (`VNDetectHumanBodyPose3DRequest` / `DetectHumanBodyPose3DRequest`) is broken on iOS 26** — fails with `Error Domain=com.apple.Vision Code=9 "Unable to run HumanBodyPose3D pipeline"` and `Could not create mlImage buffer of type kCVPixelFormatType_32BGRA`. Both the `VN`-prefixed and Swift-native API fail. Do not reintroduce it without testing on a current iOS version.
   - This is likely broken because the camera will typically not capture all of the user's joints when propped up on the desk, since the desk occludes the bottom half of the body. In other workds, we usually only see the top half of the body.
 
-### Scoring: calibration-based, not absolute
-- 2D pose can't tell the difference between "bad posture" and "weird camera angle" — if the camera is below or off-axis, a good posture looks like forward-head from the camera's perspective.
-- Solution: user taps **Set Baseline Posture**, app snapshots the ear-shoulder (and shoulder-hip, if hip is visible) angles as the baseline. Future scores measure **deviation from baseline**, not deviation from a theoretical ideal.
-- Side-profile scoring only uses **same-side joints** (ear→shoulder→hip). Centerline joints (nose, neck, root) are anatomically offset from the visible shoulder and produce non-zero angles even in perfect posture, so they're not used for scoring.
+### Scoring: 3-position calibration + head-yaw-aware classification
+- 2D pose can't separate "bad posture" from "weird camera angle" or "head turned". Rotating your head ~30° toward the screen shifts the ear's 2D position enough to tank the score even with perfect torso posture.
+- Solution: guided calibration at **three head positions** — middle, left, right edge of screen. Each baseline captures `earShoulderAngle`, `shoulderHipAngle?`, and a `yawSignature` (nose.x − shoulder.x in Vision's normalized coords).
+- At runtime: the current frame's `yawSignature` is matched to the closest baseline; scoring is done against that baseline's angles. If the current yaw is more than `yawClassificationThreshold` (0.08) from all three baselines (head turned too far, looking up/down, etc.), we return **nil** from the analyzer and **pause scoring** rather than produce a misleading number.
+- Side-profile scoring still uses **same-side joints** (ear→shoulder→hip). Centerline joints (nose, neck, root) are anatomically offset from the visible shoulder and produce non-zero angles even in perfect posture — we use `nose.x - shoulder.x` only as a yaw classifier, not as a posture metric.
 - Hip often isn't visible (desk occludes it); scoring falls back to ear-shoulder alone when that's the case.
+
+### Guided calibration flow
+- Triggered by **Set Baseline Posture** (or Recalibrate). Uses voice + marimba countdown:
+  1. Audio pipeline prime (1s silent buffer) + "Get ready…" spinner
+  2. Voice: *"Let's calibrate. Sit up straight."*
+  3. For each of middle / left / right:
+     - Voice: *"Look at the [middle | left edge | right edge] of your screen."*
+     - 3-beat marimba countdown (3, 2, 1) with tick + capture sounds
+     - Snapshot `PostureAngles` at count=1
+  4. Voice: *"Calibration complete."*
+- Cancel button (the calibrate button goes red during calibration) stops voice, cancels the task, and reverts — previous baselines stay intact.
+- If `snapshotCurrentAngles()` returns nil at any capture moment (no valid pose), the flow aborts with *"Couldn't detect your pose. Please try again."*
+
+### Voice guidance
+- `VoiceGuide.shared` is a thin wrapper around `AVSpeechSynthesizer` with an async `say(_:)` that returns when the utterance finishes (uses `AVSpeechSynthesizerDelegate.didFinish` + `CheckedContinuation`).
+- Rate slightly slower than default for clarity (`AVSpeechUtteranceDefaultSpeechRate * 0.95`).
+- Plays through the existing `.playback` + `.mixWithOthers` audio session — no special setup needed.
 
 ### Orientation: portrait + portrait-upside-down
 - Supported orientations (Info.plist-equivalent in `project.pbxproj`): `UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown`.
@@ -56,7 +74,9 @@ Posture Buddy/
 ├── PostureAnalyzer.swift        Pure math: picks best side, computes angles, scores vs baseline
 ├── PostureOverlayView.swift     SwiftUI Canvas drawing the skeleton on top of the camera preview
 ├── NotificationManager.swift    Tracks poor-posture duration; fires haptic + local notification
-└── SoundEffects.swift           Synthesized marimba tones for countdown + capture
+├── PostureSoundCoach.swift      Short-horizon (5s) grade-transition sounds (descending on slouch, ascending on recovery)
+├── VoiceGuide.swift             AVSpeechSynthesizer wrapper with async say(_:) for guided calibration
+└── SoundEffects.swift           Synthesized marimba tones + beep pairs for calibration and coaching
 ```
 
 ## Data Flow
