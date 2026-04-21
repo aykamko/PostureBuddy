@@ -110,21 +110,27 @@ struct ContentView: View {
         countdownTask?.cancel()
         countdown = countdownDuration
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        SoundEffects.play(.tick)
+        // Beat 1 — "5" on screen, lowest pitch
+        SoundEffects.playTick(index: 0)
         countdownTask = Task { @MainActor in
-            for remaining in stride(from: countdownDuration - 1, through: 0, by: -1) {
+            // Beats 2-4 — ticks at count 4, 3, 2
+            for remaining in stride(from: countdownDuration - 1, through: 2, by: -1) {
                 try? await Task.sleep(for: .seconds(1))
                 if Task.isCancelled { return }
-                countdown = remaining > 0 ? remaining : nil
-                if remaining > 0 {
-                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                    SoundEffects.play(.tick)
-                }
+                countdown = remaining
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                SoundEffects.playTick(index: countdownDuration - remaining)
             }
-            // remaining == 0 — capture the baseline
+            // Beat 5 — "1" on screen, capture note (A), calibrate
+            try? await Task.sleep(for: .seconds(1))
+            if Task.isCancelled { return }
+            countdown = 1
             UINotificationFeedbackGenerator().notificationOccurred(.success)
-            SoundEffects.play(.capture)
+            SoundEffects.playCapture()
             poseEstimator.calibrate()
+            // Hold "1" briefly so the capture moment is visible, then dismiss
+            try? await Task.sleep(for: .seconds(0.6))
+            if !Task.isCancelled { countdown = nil }
         }
     }
 
