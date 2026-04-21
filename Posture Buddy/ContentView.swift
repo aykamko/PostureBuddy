@@ -7,6 +7,7 @@
 
 import SwiftUI
 import UIKit
+import AudioToolbox
 
 struct ContentView: View {
     @StateObject private var cameraManager = CameraManager()
@@ -109,6 +110,7 @@ struct ContentView: View {
         countdownTask?.cancel()
         countdown = countdownDuration
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        SoundEffects.play(.tick)
         countdownTask = Task { @MainActor in
             for remaining in stride(from: countdownDuration - 1, through: 0, by: -1) {
                 try? await Task.sleep(for: .seconds(1))
@@ -116,10 +118,12 @@ struct ContentView: View {
                 countdown = remaining > 0 ? remaining : nil
                 if remaining > 0 {
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    SoundEffects.play(.tick)
                 }
             }
             // remaining == 0 — capture the baseline
             UINotificationFeedbackGenerator().notificationOccurred(.success)
+            SoundEffects.play(.capture)
             poseEstimator.calibrate()
         }
     }

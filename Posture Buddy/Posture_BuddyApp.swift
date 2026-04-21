@@ -27,6 +27,7 @@ struct Posture_BuddyApp: App {
             ContentView()
                 .environmentObject(notificationManager)
                 .task {
+                    SoundEffects.configureAudioSession()
                     await notificationManager.requestNotificationPermission()
                 }
         }
