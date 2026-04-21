@@ -1,5 +1,4 @@
 import Vision
-import simd
 
 struct PostureScore {
     let value: Float
@@ -27,40 +26,81 @@ struct PostureScore {
     }
 }
 
+// A snapshot of the side-profile angles for one frame.
+// Baseline = same struct captured when the user taps Calibrate.
+struct PostureAngles {
+    let earShoulderAngle: Float       // degrees from image-vertical
+    let shoulderHipAngle: Float?      // nil if hip was occluded
+}
+
 struct PostureAnalyzer {
-    // Degrees from the body's own up-axis at which score hits zero.
-    // 3D positions are in true meters; 5-15° is typical forward-head, 20° is clearly poor.
-    private nonisolated static let maxAngle: Float = 20.0
+    private nonisolated static let confidenceThreshold: Float = 0.3
+    // How far (in degrees) from the baseline before the score hits zero.
+    private nonisolated static let maxDeviation: Float = 15.0
 
-    nonisolated func analyze3D(_ observation: HumanBodyPose3DObservation) -> PostureScore? {
-        func position(_ name: HumanBodyPose3DObservation.JointName) -> simd_float3 {
-            let m = observation.cameraRelativePosition(for: name)
-            return simd_float3(m.columns.3.x, m.columns.3.y, m.columns.3.z)
+    nonisolated func computeAngles(_ observation: VNHumanBodyPoseObservation) -> PostureAngles? {
+        guard let allPoints = try? observation.recognizedPoints(.all),
+              let side = pickBestSide(allPoints)
+        else { return nil }
+
+        let earShoulder = angleFromVertical(from: side.ear, to: side.shoulder)
+        let shoulderHip = side.hip.map { angleFromVertical(from: side.shoulder, to: $0) }
+        return PostureAngles(earShoulderAngle: earShoulder, shoulderHipAngle: shoulderHip)
+    }
+
+    // Score = how close current posture is to the calibrated baseline.
+    // Ear-shoulder deviation weighted 60%, shoulder-hip 40% (when available).
+    nonisolated func score(current: PostureAngles, baseline: PostureAngles) -> PostureScore {
+        let earDev = abs(current.earShoulderAngle - baseline.earShoulderAngle)
+        let earScore = max(0, 1.0 - earDev / Self.maxDeviation)
+
+        let value: Float
+        if let curHip = current.shoulderHipAngle, let baseHip = baseline.shoulderHipAngle {
+            let hipDev = abs(curHip - baseHip)
+            let hipScore = max(0, 1.0 - hipDev / Self.maxDeviation)
+            value = (0.6 * earScore + 0.4 * hipScore) * 100
+        } else {
+            value = earScore * 100
         }
+        return PostureScore(value: value)
+    }
 
-        let head = position(.centerHead)
-        let leftShoulder = position(.leftShoulder)
-        let rightShoulder = position(.rightShoulder)
-        let root = position(.root)
+    private nonisolated func pickBestSide(
+        _ points: [VNHumanBodyPoseObservation.JointName: VNRecognizedPoint]
+    ) -> (ear: CGPoint, shoulder: CGPoint, hip: CGPoint?)? {
+        let sides: [(ear: VNHumanBodyPoseObservation.JointName,
+                     shoulder: VNHumanBodyPoseObservation.JointName,
+                     hip: VNHumanBodyPoseObservation.JointName)] = [
+            (.leftEar, .leftShoulder, .leftHip),
+            (.rightEar, .rightShoulder, .rightHip)
+        ]
 
-        let shoulderMid = (leftShoulder + rightShoulder) * 0.5
+        var best: (ear: CGPoint, shoulder: CGPoint, hip: CGPoint?)? = nil
+        var bestConfidence: Float = 0
 
-        // Use the body's own axis (root → shoulders) as "up" instead of gravity — this makes
-        // the measurement intrinsic to the body, so it doesn't matter how the camera is tilted.
-        let bodyUp = simd_normalize(shoulderMid - root)
-        let headOffset = head - shoulderMid
+        for side in sides {
+            guard
+                let earPt = points[side.ear],
+                let shoulderPt = points[side.shoulder],
+                earPt.confidence >= Self.confidenceThreshold,
+                shoulderPt.confidence >= Self.confidenceThreshold
+            else { continue }
 
-        // Decompose headOffset into a component along bodyUp and a perpendicular component.
-        // A perfectly-stacked posture has a large positive upComponent and near-zero perpComponent.
-        let upComponent = simd_dot(headOffset, bodyUp)
-        let perp = headOffset - bodyUp * upComponent
-        let perpMag = simd_length(perp)
+            let hipPt = points[side.hip]
+            let hipValid = (hipPt?.confidence ?? 0) >= Self.confidenceThreshold
+            let total = earPt.confidence + shoulderPt.confidence + (hipValid ? hipPt!.confidence : 0)
 
-        // If the head is below shoulders (upComponent <= 0), posture is collapsed — score 0.
-        guard upComponent > 0 else { return PostureScore(value: 0) }
+            if total > bestConfidence {
+                bestConfidence = total
+                best = (earPt.location, shoulderPt.location, hipValid ? hipPt?.location : nil)
+            }
+        }
+        return best
+    }
 
-        let angle = atan2(perpMag, upComponent) * 180 / .pi
-        let score = max(0, 1.0 - angle / Self.maxAngle) * 100
-        return PostureScore(value: score)
+    nonisolated private func angleFromVertical(from a: CGPoint, to b: CGPoint) -> Float {
+        let dx = Float(b.x - a.x)
+        let dy = Float(b.y - a.y)
+        return atan2(abs(dx), abs(dy)) * 180 / .pi
     }
 }

@@ -5,7 +5,8 @@
       "mcp__xcode__XcodeListWindows",
       "mcp__xcode__XcodeListNavigatorIssues",
       "mcp__xcode__GetBuildLog",
-      "mcp__xcode__DocumentationSearch"
+      "mcp__xcode__DocumentationSearch",
+      "mcp__xcode__BuildProject"
     ]
   }
 }

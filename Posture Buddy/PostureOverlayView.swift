@@ -4,16 +4,18 @@ import Vision
 struct PostureOverlayView: View {
     let detectedPose: DetectedPose?
 
-    private static let connections: [(HumanBodyPose3DObservation.JointName, HumanBodyPose3DObservation.JointName)] = [
-        // Head / spine
-        (.topHead, .centerHead),
-        (.centerHead, .spine),
-        (.spine, .root),
-        // Shoulders
-        (.centerHead, .leftShoulder), (.centerHead, .rightShoulder),
+    private static let connections: [(VNHumanBodyPoseObservation.JointName, VNHumanBodyPoseObservation.JointName)] = [
+        // Head
+        (.nose, .leftEye), (.nose, .rightEye),
+        (.leftEye, .leftEar), (.rightEye, .rightEar),
+        // Neck to head and shoulders
+        (.neck, .nose),
+        (.neck, .leftShoulder), (.neck, .rightShoulder),
+        // Ears to shoulders (side profile spine line)
+        (.leftEar, .leftShoulder), (.rightEar, .rightShoulder),
+        // Torso
         (.leftShoulder, .rightShoulder),
-        (.leftShoulder, .spine), (.rightShoulder, .spine),
-        // Hips
+        (.leftShoulder, .leftHip), (.rightShoulder, .rightHip),
         (.leftHip, .rightHip),
         (.leftHip, .root), (.rightHip, .root),
         // Arms
@@ -28,7 +30,7 @@ struct PostureOverlayView: View {
         Canvas { context, size in
             guard let pose = detectedPose else { return }
             let kp = pose.keypoints
-            let lineColor = gradeColor(pose.score.grade)
+            let lineColor = pose.score.map { gradeColor($0.grade) } ?? .white.opacity(0.6)
 
             for (a, b) in Self.connections {
                 guard let ptA = kp[a], let ptB = kp[b] else { continue }
