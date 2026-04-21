@@ -23,7 +23,7 @@ struct ContentView: View {
     @State private var showTrackingFailedAlert = false
 
     private let countdownDuration = 5
-    private let trackingTimeoutSeconds: Double = 10
+    private let trackingTimeoutSeconds: Double = 20
 
     var body: some View {
         ZStack {
@@ -86,6 +86,18 @@ struct ContentView: View {
                     .allowsHitTesting(false)
                     .transition(.opacity)
             }
+
+            if showTrackingFailedAlert {
+                AlertOverlay(
+                    title: "Pose Tracking Unavailable",
+                    message: "Apple's pose-detection model couldn't load on this device. Try:\n\n• Free up storage space on your iPhone\n• Force-quit and relaunch Posture Buddy\n• Restart your iPhone",
+                    buttonTitle: "OK"
+                ) {
+                    showTrackingFailedAlert = false
+                }
+                .rotationEffect(isUpsideDown ? .degrees(180) : .zero)
+                .transition(.opacity)
+            }
         }
         .animation(.easeInOut(duration: 0.3), value: isUpsideDown)
         .animation(.easeInOut(duration: 0.2), value: countdown)
@@ -106,11 +118,7 @@ struct ContentView: View {
                 trackingTimeoutTask = nil
             }
         }
-        .alert("Pose Tracking Unavailable", isPresented: $showTrackingFailedAlert) {
-            Button("OK", role: .cancel) { }
-        } message: {
-            Text("Apple's pose-detection model couldn't load on this device. Try:\n\n• Free up storage space on your iPhone\n• Restart your iPhone\n• Force-quit and relaunch Posture Buddy")
-        }
+        .animation(.easeInOut(duration: 0.2), value: showTrackingFailedAlert)
         .onChange(of: poseEstimator.currentPose?.score?.value) {
             guard poseEstimator.isCalibrated else { return }
             notificationManager.update(score: poseEstimator.currentPose?.score)
@@ -280,6 +288,45 @@ struct TrackingLoadingView: View {
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
         .background(Capsule().fill(Color.white.opacity(0.18)))
+    }
+}
+
+struct AlertOverlay: View {
+    let title: String
+    let message: String
+    let buttonTitle: String
+    let onDismiss: () -> Void
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.5).ignoresSafeArea()
+            VStack(spacing: 14) {
+                Text(title)
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
+                Text(message)
+                    .font(.callout)
+                    .foregroundStyle(.white.opacity(0.9))
+                    .multilineTextAlignment(.leading)
+                Button(action: onDismiss) {
+                    Text(buttonTitle)
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 28)
+                        .padding(.vertical, 10)
+                        .background(Capsule().fill(Color.accentColor))
+                }
+                .padding(.top, 4)
+            }
+            .padding(22)
+            .frame(maxWidth: 320)
+            .background(
+                RoundedRectangle(cornerRadius: 20)
+                    .fill(Color(white: 0.15))
+            )
+            .padding(24)
+        }
     }
 }
 
