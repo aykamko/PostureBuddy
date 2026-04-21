@@ -7,11 +7,11 @@ import Combine
 ///
 /// Sustained-state timers in both directions mean brief grade flutters don't trigger sounds.
 /// The recovery sound only fires if the slouch sound played first (hysteresis).
+private let slouchDelay: TimeInterval = 5.0
+private let recoveryDelay: TimeInterval = 5.0
+
 @MainActor
 final class PostureSoundCoach: ObservableObject {
-    var slouchDelay: TimeInterval = 10.0
-    var recoveryDelay: TimeInterval = 10.0
-
     private var slouchTimerTask: Task<Void, Never>?
     private var recoveryTimerTask: Task<Void, Never>?
     private var isAlerted = false  // true once the slouch sound has played
@@ -29,12 +29,14 @@ final class PostureSoundCoach: ObservableObject {
             slouchTimerTask = nil
             // Start recovery timer only if we previously alerted and one isn't already running
             guard isAlerted, recoveryTimerTask == nil else { return }
+            print("[Coach] good posture — starting \(recoveryDelay)s recovery timer")
             recoveryTimerTask = Task { @MainActor [weak self] in
-                try? await Task.sleep(for: .seconds(self?.recoveryDelay ?? 10.0))
+                try? await Task.sleep(for: .seconds(recoveryDelay))
                 if Task.isCancelled { return }
                 guard let self else { return }
                 self.recoveryTimerTask = nil
                 self.isAlerted = false
+                print("[Coach] 🔊 playing recovery sound")
                 SoundEffects.playRecovery()
             }
 
@@ -46,12 +48,14 @@ final class PostureSoundCoach: ObservableObject {
             guard !isAlerted else { return }
             // Already waiting — let the timer finish
             guard slouchTimerTask == nil else { return }
+            print("[Coach] poor posture — starting \(slouchDelay)s slouch timer")
             slouchTimerTask = Task { @MainActor [weak self] in
-                try? await Task.sleep(for: .seconds(self?.slouchDelay ?? 10.0))
+                try? await Task.sleep(for: .seconds(slouchDelay))
                 if Task.isCancelled { return }
                 guard let self else { return }
                 self.slouchTimerTask = nil
                 self.isAlerted = true
+                print("[Coach] 🔊 playing slouch sound")
                 SoundEffects.playSlouch()
             }
         }

@@ -7,11 +7,19 @@ struct PostureScore {
     enum Grade {
         case good, fair, poor
 
-        var color: (red: Double, green: Double, blue: Double) {
+        nonisolated var color: (red: Double, green: Double, blue: Double) {
             switch self {
             case .good: return (0.2, 0.8, 0.3)
             case .fair: return (1.0, 0.8, 0.0)
             case .poor: return (0.9, 0.2, 0.2)
+            }
+        }
+
+        nonisolated var label: String {
+            switch self {
+            case .good: return "good"
+            case .fair: return "fair"
+            case .poor: return "poor"
             }
         }
     }

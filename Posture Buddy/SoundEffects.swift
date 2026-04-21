@@ -156,7 +156,7 @@ final class SoundEffects {
         secondFreq: Float,
         noteDuration: Float = 0.18,
         gap: Float = 0.03,
-        amplitude: Float = 0.15,
+        amplitude: Float = 0.45,
         format: AVAudioFormat,
         sampleRate: Double
     ) -> AVAudioPCMBuffer? {

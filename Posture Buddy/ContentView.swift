@@ -24,7 +24,7 @@ struct ContentView: View {
     @State private var showTrackingFailedAlert = false
 
     private let countdownDuration = 5
-    private let trackingTimeoutSeconds: Double = 30
+    private let trackingTimeoutSeconds: Double = 45
 
     var body: some View {
         mainContent
