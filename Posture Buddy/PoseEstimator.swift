@@ -82,20 +82,22 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
 
         // Compute score only if calibrated AND analyzer can classify the head position
         let finalScore: PostureScore?
+        var matchedPosition: CalibrationPosition?
         if let angles, let currentBaselines, let raw = analyzer.score(current: angles, baselines: currentBaselines) {
             let smoothed = smoothedScore.withLock { current in
-                let new = 0.8 * current + 0.2 * raw.value
+                let new = 0.8 * current + 0.2 * raw.score.value
                 current = new
                 return PostureScore(value: new)
             }
             finalScore = smoothed
+            matchedPosition = raw.position
         } else {
             finalScore = nil
         }
 
         if shouldLog {
-            if let finalScore {
-                print("[Posture] score=\(String(format: "%.1f", finalScore.value)) [\(finalScore.grade.label)]")
+            if let finalScore, let matchedPosition {
+                print("[Posture] score=\(String(format: "%.1f", finalScore.value)) [\(finalScore.grade.label)] mode=\(matchedPosition.rawValue)")
             } else if currentBaselines != nil && angles != nil {
                 print("[Posture] paused — head position not recognized")
             } else if angles != nil {

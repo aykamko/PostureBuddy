@@ -54,6 +54,10 @@ struct PostureBaselines {
     let right: PostureAngles
 }
 
+enum CalibrationPosition: String {
+    case middle, left, right
+}
+
 struct PostureAnalyzer {
     private nonisolated static let confidenceThreshold: Float = 0.3
     // How far (in degrees) from the baseline before the score hits zero.
@@ -91,14 +95,21 @@ struct PostureAnalyzer {
     ///   • current frame has no yawSignature (nose not detected), or
     ///   • current yaw is too far from all three baselines (head in an uncalibrated pose)
     /// Callers treat nil as "pause scoring".
-    nonisolated func score(current: PostureAngles, baselines: PostureBaselines) -> PostureScore? {
+    nonisolated func score(
+        current: PostureAngles,
+        baselines: PostureBaselines
+    ) -> (score: PostureScore, position: CalibrationPosition)? {
         guard let currentYaw = current.yawSignature else { return nil }
 
-        let candidates = [baselines.middle, baselines.left, baselines.right]
+        let candidates: [(baseline: PostureAngles, position: CalibrationPosition)] = [
+            (baselines.middle, .middle),
+            (baselines.left, .left),
+            (baselines.right, .right),
+        ]
         var bestIdx: Int?
         var bestDist: Float = .greatestFiniteMagnitude
         for (i, candidate) in candidates.enumerated() {
-            guard let baseYaw = candidate.yawSignature else { continue }
+            guard let baseYaw = candidate.baseline.yawSignature else { continue }
             let dist = abs(currentYaw - baseYaw)
             if dist < bestDist {
                 bestDist = dist
@@ -109,7 +120,8 @@ struct PostureAnalyzer {
         guard let bestIdx, bestDist <= Self.yawClassificationThreshold else {
             return nil
         }
-        let matched = candidates[bestIdx]
+        let matched = candidates[bestIdx].baseline
+        let position = candidates[bestIdx].position
 
         let earDev = abs(current.earShoulderAngle - matched.earShoulderAngle)
         let earScore = max(0, 1.0 - earDev / Self.maxDeviation)
@@ -122,7 +134,7 @@ struct PostureAnalyzer {
         } else {
             value = earScore * 100
         }
-        return PostureScore(value: value)
+        return (PostureScore(value: value), position)
     }
 
     private nonisolated func pickBestSide(
