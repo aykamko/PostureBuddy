@@ -64,11 +64,11 @@ final class CameraManager: ObservableObject {
         device.unlockForConfiguration()
 
         let output = AVCaptureVideoDataOutput()
-        // Vision's 3D pose pipeline needs IOSurface-backed, Metal-compatible BGRA buffers.
+        // Use the camera's native YUV format — no on-the-fly conversion per frame.
+        // (BGRA + IOSurface/Metal flags were needed for the 3D pose pipeline,
+        // which we no longer use.)
         output.videoSettings = [
-            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
-            kCVPixelBufferIOSurfacePropertiesKey as String: [:] as CFDictionary,
-            kCVPixelBufferMetalCompatibilityKey as String: true
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
         ]
         output.alwaysDiscardsLateVideoFrames = true
 
