@@ -49,10 +49,13 @@ final class VoiceGuide: NSObject {
     private func cancelCurrent() {
         currentPlayer?.stop()
         currentPlayer = nil
-        if let continuation = finishContinuation {
-            finishContinuation = nil
-            continuation.resume()
-        }
+        resumePendingContinuation()
+    }
+
+    private func resumePendingContinuation() {
+        guard let continuation = finishContinuation else { return }
+        finishContinuation = nil
+        continuation.resume()
     }
 
     @discardableResult
@@ -83,9 +86,6 @@ extension VoiceGuide: AVAudioPlayerDelegate {
 
     private func handlePlaybackComplete() {
         currentPlayer = nil
-        if let continuation = finishContinuation {
-            finishContinuation = nil
-            continuation.resume()
-        }
+        resumePendingContinuation()
     }
 }

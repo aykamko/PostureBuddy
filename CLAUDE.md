@@ -32,7 +32,9 @@ Classification uses `YawSignature.distance(to:)` (plain Euclidean). Baselines an
 - Landmark points are in `VNFaceLandmarkRegion2D.normalizedPoints`, which are *bounding-box-local* (0-1 within the face rect). `extractFaceLandmarks(from:)` converts them to image-normalized coords so they share the skeleton's coordinate system (needed for drawing, not for the yaw `direction` signal which uses bbox-local coords).
 
 ### Guided calibration flow
-- Triggered by **Set Baseline Posture** (or Recalibrate). Uses pre-recorded voice + marimba countdown:
+Owned by `CalibrationController` (a `@MainActor` `ObservableObject`). The controller publishes `instruction: String?` and `countdown: Int?`; `ContentView` observes those and renders `GuidedCalibrationOverlay`. All flow logic — voice prompts, marimba ticks, haptics, snapshot capture, cancellation — lives in the controller so `ContentView` only composes views.
+
+- Triggered by **Set Baseline Posture** (or Recalibrate), which calls `calibration.start(poseEstimator:, soundCoach:)`. Flow:
   1. Audio pipeline prime (1s silent buffer) + "Get ready…" spinner
   2. Voice: *"Let's calibrate. Please sit up straight."*
   3. For middle / left / right:
@@ -40,8 +42,9 @@ Classification uses `YawSignature.distance(to:)` (plain Euclidean). Baselines an
      - 3-beat marimba countdown (3, 2, 1) with tick + capture sounds
      - Snapshot `PostureAngles` at count=1
   4. Voice: *"Calibration is complete."*
-- Cancel button (the calibrate button goes red during calibration) stops voice, cancels the task, and reverts — previous baselines stay intact.
+- Cancel button (the calibrate button goes red during calibration) calls `calibration.cancel()` — cancels the controller's task, stops voice, reverts UI. Previous baselines stay intact.
 - If `snapshotCurrentAngles()` returns nil at any capture moment (no valid pose), the flow aborts with *"Couldn't detect your pose. Please try again."*
+- The controller's run-flow uses `try Task.checkCancellation()` + `try await Task.sleep(for:)` with a single `do/catch cleanup()` wrapper. Don't add manual `if Task.isCancelled { … }` guards — the throwing path already handles them.
 
 ### Voice guidance — pre-recorded, not TTS
 - Originally used `AVSpeechSynthesizer`, but iOS default TTS voices sound robotic and premium voices require per-user downloads from Settings → Accessibility. Apple also walls off Siri's voice from third-party apps entirely (Siri voice downloads are not exposed via `AVSpeechSynthesisVoice.speechVoices()` or the `say` command).
@@ -76,10 +79,11 @@ Workflow:
 - **Native SwiftUI `.alert` uses the system interface orientation and won't respect manual rotation** — use the custom `AlertOverlay` component inside the rotated ZStack instead.
 
 ### Concurrency: MainActor default isolation
-- Project uses `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` — every class is implicitly `@MainActor`.
+- Project uses `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` — every class, struct, and extension is implicitly `@MainActor`.
 - `AVCaptureVideoDataOutputSampleBufferDelegate.captureOutput` MUST be marked `nonisolated` or frames get dispatched to main, defeating the background video queue and blocking the UI.
 - Shared background state (orientation, last-processed-time, smoothed score, current angles, baseline) is protected with `OSAllocatedUnfairLock`.
 - Static `let` constants used from `nonisolated` methods must be explicitly `nonisolated static let`.
+- **Types used from `captureOutput` must opt out of MainActor too.** `PostureAnalyzer` and `YawSignature` are declared `nonisolated struct` so all their methods are callable on the video queue without per-method annotations. Same goes for extension methods intended for background use (e.g. the `OSAllocatedUnfairLock.shouldFire` throttle helper in `PoseEstimator.swift` is `nonisolated`).
 
 ### Audio: synthesized marimba-like tones
 - No bundled sound files. `SoundEffects.swift` generates tones at runtime using `AVAudioEngine` + `AVAudioPCMBuffer` + a simple additive synthesis (fundamental + octave + fast-decaying inharmonic "clink").
@@ -100,24 +104,35 @@ Workflow:
 
 ```
 Posture Buddy/
-├── Posture_BuddyApp.swift       App entry. Creates NotificationManager, configures audio session
-├── ContentView.swift            Root view; wires camera + pose + overlay + HUD + calibration UI
-├── CameraManager.swift          AVCaptureSession owner (front camera, BGRA, no audio session touch)
-├── CameraPreviewView.swift      UIViewRepresentable wrapping AVCaptureVideoPreviewLayer
-├── PoseEstimator.swift          Runs VNDetectHumanBodyPoseRequest on videoQueue; publishes DetectedPose
-├── PostureAnalyzer.swift        Pure math: picks best side, computes angles, scores vs baseline
-├── PostureOverlayView.swift     SwiftUI Canvas drawing the skeleton on top of the camera preview
-├── NotificationManager.swift    Tracks poor-posture duration; fires haptic + local notification
-├── PostureSoundCoach.swift      Short-horizon (5s) grade-transition sounds (descending on slouch, ascending on recovery)
-├── VoiceGuide.swift             Plays bundled .aiff prompts via AVAudioPlayer; keyed by VoicePrompt enum
-├── VoicePrompts/                Bundled pre-recorded calibration audio (ElevenLabs "Clara")
-│   ├── lets_calibrate.aiff
-│   ├── look_middle.aiff
-│   ├── look_left.aiff
-│   ├── look_right.aiff
-│   ├── calibration_complete.aiff
-│   └── pose_not_detected.aiff
-└── SoundEffects.swift           Synthesized marimba tones + beep pairs for calibration and coaching
+├── Posture_BuddyApp.swift              App entry. Creates NotificationManager, configures audio session
+├── ContentView.swift                   Orchestration shell: camera lifecycle, scene phase, layout (~185 lines)
+├── CameraManager.swift                 AVCaptureSession owner (front camera, no audio session touch)
+├── CameraPreviewView.swift             UIViewRepresentable wrapping AVCaptureVideoPreviewLayer
+├── PoseEstimator.swift                 Runs VNDetectHumanBodyPoseRequest on videoQueue; publishes DetectedPose
+├── PostureAnalyzer.swift               Pure math: picks best side, computes angles, scores vs baseline
+├── PostureModels.swift                 Data types: DetectedPose, FaceLandmarks, PostureScore/Grade,
+│                                       PostureAngles, YawSignature (+ factory), PostureBaselines
+├── PostureGrade+UI.swift               SwiftUI-bridge: PostureScore.Grade.swiftUIColor
+├── PostureOverlayView.swift            SwiftUI Canvas drawing skeleton + face landmarks
+├── CalibrationController.swift         @MainActor ObservableObject driving the guided-calibration flow
+├── UIDeviceOrientation+Vision.swift    .visionOrientation mapping for front-camera buffers
+├── NotificationManager.swift           Tracks poor-posture duration; fires haptic + local notification
+├── PostureSoundCoach.swift             Short-horizon (5s) grade-transition sounds
+├── VoiceGuide.swift                    Plays bundled .aiff prompts via AVAudioPlayer; keyed by VoicePrompt enum
+├── SoundEffects.swift                  Synthesized marimba tones + beep pairs
+├── Views/                              Leaf SwiftUI views composed by ContentView
+│   ├── ScoreHUDView.swift              108pt circle, color-coded score
+│   ├── CalibrateButton.swift           Capsule button, flips to red "Cancel" while calibrating
+│   ├── TrackingLoadingView.swift       Spinner + message while pose model is loading
+│   ├── AlertOverlay.swift              Custom modal (native .alert doesn't respect manual rotation)
+│   └── GuidedCalibrationOverlay.swift  Instruction text + big countdown number
+└── VoicePrompts/                       Bundled pre-recorded calibration audio (ElevenLabs "Clara")
+    ├── lets_calibrate.aiff
+    ├── look_middle.aiff
+    ├── look_left.aiff
+    ├── look_right.aiff
+    ├── calibration_complete.aiff
+    └── pose_not_detected.aiff
 ```
 
 ## Data Flow

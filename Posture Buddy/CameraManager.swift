@@ -4,16 +4,11 @@ import Combine
 final class CameraManager: ObservableObject {
     let session = AVCaptureSession()
 
-    @Published var isAuthorized = false
-    @Published var isRunning = false
-
     private let videoQueue = DispatchQueue(label: "posture.video", qos: .userInitiated)
     private var videoOutput: AVCaptureVideoDataOutput?
 
     func requestAccessAndSetup() async {
-        let status = await AVCaptureDevice.requestAccess(for: .video)
-        await MainActor.run { self.isAuthorized = status }
-        guard status else { return }
+        guard await AVCaptureDevice.requestAccess(for: .video) else { return }
         await withCheckedContinuation { continuation in
             videoQueue.async {
                 self.configureSession()
@@ -30,7 +25,6 @@ final class CameraManager: ObservableObject {
         videoQueue.async {
             guard !self.session.isRunning else { return }
             self.session.startRunning()
-            Task { @MainActor in self.isRunning = true }
         }
     }
 
@@ -38,7 +32,6 @@ final class CameraManager: ObservableObject {
         videoQueue.async {
             guard self.session.isRunning else { return }
             self.session.stopRunning()
-            Task { @MainActor in self.isRunning = false }
         }
     }
 

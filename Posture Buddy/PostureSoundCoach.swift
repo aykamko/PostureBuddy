@@ -30,12 +30,9 @@ final class PostureSoundCoach: ObservableObject {
             // Start recovery timer only if we previously alerted and one isn't already running
             guard isAlerted, recoveryTimerTask == nil else { return }
             print("[Coach] good posture — starting \(recoveryDelay)s recovery timer")
-            recoveryTimerTask = Task { @MainActor [weak self] in
-                try? await Task.sleep(for: .seconds(recoveryDelay))
-                if Task.isCancelled { return }
-                guard let self else { return }
-                self.recoveryTimerTask = nil
-                self.isAlerted = false
+            recoveryTimerTask = scheduleDelayed(delay: recoveryDelay) { [weak self] in
+                self?.recoveryTimerTask = nil
+                self?.isAlerted = false
                 print("[Coach] 🔊 playing recovery sound")
                 SoundEffects.playRecovery()
             }
@@ -49,12 +46,9 @@ final class PostureSoundCoach: ObservableObject {
             // Already waiting — let the timer finish
             guard slouchTimerTask == nil else { return }
             print("[Coach] poor posture — starting \(slouchDelay)s slouch timer")
-            slouchTimerTask = Task { @MainActor [weak self] in
-                try? await Task.sleep(for: .seconds(slouchDelay))
-                if Task.isCancelled { return }
-                guard let self else { return }
-                self.slouchTimerTask = nil
-                self.isAlerted = true
+            slouchTimerTask = scheduleDelayed(delay: slouchDelay) { [weak self] in
+                self?.slouchTimerTask = nil
+                self?.isAlerted = true
                 print("[Coach] 🔊 playing slouch sound")
                 SoundEffects.playSlouch()
             }
@@ -67,5 +61,16 @@ final class PostureSoundCoach: ObservableObject {
         recoveryTimerTask?.cancel()
         recoveryTimerTask = nil
         isAlerted = false
+    }
+
+    private func scheduleDelayed(
+        delay: TimeInterval,
+        _ action: @escaping @MainActor () -> Void
+    ) -> Task<Void, Never> {
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled else { return }
+            action()
+        }
     }
 }

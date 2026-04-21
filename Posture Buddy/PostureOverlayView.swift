@@ -30,7 +30,7 @@ struct PostureOverlayView: View {
         Canvas { context, size in
             guard let pose = detectedPose else { return }
             let kp = pose.keypoints
-            let lineColor = pose.score.map { gradeColor($0.grade) } ?? .white.opacity(0.6)
+            let lineColor = pose.score?.grade.swiftUIColor ?? .white.opacity(0.6)
 
             // Body skeleton
             for (a, b) in Self.connections {
@@ -41,9 +41,7 @@ struct PostureOverlayView: View {
                 context.stroke(path, with: .color(lineColor), lineWidth: 3)
             }
             for (_, point) in kp {
-                let center = visionToCanvas(point, in: size)
-                let rect = CGRect(x: center.x - 5, y: center.y - 5, width: 10, height: 10)
-                context.fill(Path(ellipseIn: rect), with: .color(.white))
+                drawDot(at: visionToCanvas(point, in: size), radius: 5, color: .white, in: &context)
             }
 
             // Face landmarks (debug overlay — cyan to stand out from the white body dots)
@@ -61,22 +59,19 @@ struct PostureOverlayView: View {
                 ))
                 context.stroke(boxPath, with: .color(.cyan.opacity(0.6)), lineWidth: 1)
 
-                // Landmark points
                 for point in face.points {
-                    let center = visionToCanvas(point, in: size)
-                    let rect = CGRect(x: center.x - 1.5, y: center.y - 1.5, width: 3, height: 3)
-                    context.fill(Path(ellipseIn: rect), with: .color(.cyan))
+                    drawDot(at: visionToCanvas(point, in: size), radius: 1.5, color: .cyan, in: &context)
                 }
             }
         }
     }
 
-    private func visionToCanvas(_ pt: CGPoint, in size: CGSize) -> CGPoint {
-        CGPoint(x: pt.x * size.width, y: (1.0 - pt.y) * size.height)
+    private func drawDot(at center: CGPoint, radius: CGFloat, color: Color, in context: inout GraphicsContext) {
+        let rect = CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2)
+        context.fill(Path(ellipseIn: rect), with: .color(color))
     }
 
-    private func gradeColor(_ grade: PostureScore.Grade) -> Color {
-        let c = grade.color
-        return Color(red: c.red, green: c.green, blue: c.blue)
+    private func visionToCanvas(_ pt: CGPoint, in size: CGSize) -> CGPoint {
+        CGPoint(x: pt.x * size.width, y: (1.0 - pt.y) * size.height)
     }
 }
