@@ -17,9 +17,13 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var isUpsideDown = false
     @State private var countdown: Int? = nil
+    @State private var isPriming = false
     @State private var countdownTask: Task<Void, Never>? = nil
+    @State private var trackingTimeoutTask: Task<Void, Never>? = nil
+    @State private var showTrackingFailedAlert = false
 
     private let countdownDuration = 5
+    private let trackingTimeoutSeconds: Double = 10
 
     var body: some View {
         ZStack {
@@ -56,22 +60,27 @@ struct ContentView: View {
                 Group {
                     if poseEstimator.isTrackingReady {
                         CalibrateButton(isCalibrated: poseEstimator.isCalibrated,
-                                        countdown: countdown) {
-                            if countdown != nil {
+                                        isActive: isPriming || countdown != nil) {
+                            if isPriming || countdown != nil {
                                 cancelCountdown()
                             } else {
                                 startCountdown()
                             }
                         }
                     } else {
-                        TrackingLoadingView()
+                        TrackingLoadingView(message: "Initializing pose tracking…")
                     }
                 }
                 .padding(.bottom, 30)
             }
             .rotationEffect(isUpsideDown ? .degrees(180) : .zero)
 
-            if let countdown {
+            if isPriming {
+                PrimingOverlay()
+                    .rotationEffect(isUpsideDown ? .degrees(180) : .zero)
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            } else if let countdown {
                 CountdownOverlay(value: countdown)
                     .rotationEffect(isUpsideDown ? .degrees(180) : .zero)
                     .allowsHitTesting(false)
@@ -80,13 +89,27 @@ struct ContentView: View {
         }
         .animation(.easeInOut(duration: 0.3), value: isUpsideDown)
         .animation(.easeInOut(duration: 0.2), value: countdown)
+        .animation(.easeInOut(duration: 0.2), value: isPriming)
         .task {
             UIDevice.current.beginGeneratingDeviceOrientationNotifications()
             isUpsideDown = UIDevice.current.orientation == .portraitUpsideDown
             poseEstimator.updateOrientation(visionOrientation(for: UIDevice.current.orientation))
+            UIApplication.shared.isIdleTimerDisabled = true
             await cameraManager.requestAccessAndSetup()
             cameraManager.setSampleBufferDelegate(poseEstimator)
             cameraManager.start()
+            startTrackingTimeout()
+        }
+        .onChange(of: poseEstimator.isTrackingReady) { _, ready in
+            if ready {
+                trackingTimeoutTask?.cancel()
+                trackingTimeoutTask = nil
+            }
+        }
+        .alert("Pose Tracking Unavailable", isPresented: $showTrackingFailedAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("Apple's pose-detection model couldn't load on this device. Try:\n\n• Free up storage space on your iPhone\n• Restart your iPhone\n• Force-quit and relaunch Posture Buddy")
         }
         .onChange(of: poseEstimator.currentPose?.score?.value) {
             guard poseEstimator.isCalibrated else { return }
@@ -101,10 +124,14 @@ struct ContentView: View {
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .active:
+                UIApplication.shared.isIdleTimerDisabled = true
                 cameraManager.start()
+                startTrackingTimeout()
             case .background, .inactive:
+                UIApplication.shared.isIdleTimerDisabled = false
                 cameraManager.stop()
                 cancelCountdown()
+                trackingTimeoutTask?.cancel()
                 notificationManager.update(score: nil)
             @unknown default:
                 break
@@ -114,11 +141,19 @@ struct ContentView: View {
 
     private func startCountdown() {
         countdownTask?.cancel()
-        countdown = countdownDuration
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        // Beat 1 — "5" on screen, lowest pitch
-        SoundEffects.playTick(index: 0)
+        // Phase 1: prime the audio pipeline. Show spinner, no haptic/sound yet.
+        isPriming = true
+        SoundEffects.prime()
         countdownTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(SoundEffects.primeDuration))
+            if Task.isCancelled { isPriming = false; return }
+            isPriming = false
+
+            // Phase 2: actual countdown. Beat 1 — "5" on screen, lowest pitch.
+            countdown = countdownDuration
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            SoundEffects.playTick(index: 0)
+
             // Beats 2-4 — ticks at count 4, 3, 2
             for remaining in stride(from: countdownDuration - 1, through: 2, by: -1) {
                 try? await Task.sleep(for: .seconds(1))
@@ -144,6 +179,19 @@ struct ContentView: View {
         countdownTask?.cancel()
         countdownTask = nil
         countdown = nil
+        isPriming = false
+    }
+
+    private func startTrackingTimeout() {
+        trackingTimeoutTask?.cancel()
+        guard !poseEstimator.isTrackingReady else { return }
+        trackingTimeoutTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(trackingTimeoutSeconds))
+            if Task.isCancelled { return }
+            if !poseEstimator.isTrackingReady {
+                showTrackingFailedAlert = true
+            }
+        }
     }
 }
 
@@ -185,7 +233,7 @@ struct ScoreHUDView: View {
 
 struct CalibrateButton: View {
     let isCalibrated: Bool
-    let countdown: Int?
+    let isActive: Bool   // true during audio-prime or countdown phases
     let action: () -> Void
 
     var body: some View {
@@ -203,33 +251,52 @@ struct CalibrateButton: View {
     }
 
     private var icon: String {
-        if countdown != nil { return "xmark.circle.fill" }
+        if isActive { return "xmark.circle.fill" }
         return isCalibrated ? "arrow.clockwise.circle.fill" : "scope"
     }
 
     private var label: String {
-        if countdown != nil { return "Cancel" }
+        if isActive { return "Cancel" }
         return isCalibrated ? "Recalibrate" : "Set Baseline Posture"
     }
 
     private var background: Color {
-        if countdown != nil { return .red.opacity(0.8) }
+        if isActive { return .red.opacity(0.8) }
         return isCalibrated ? Color.white.opacity(0.2) : Color.accentColor
     }
 }
 
 struct TrackingLoadingView: View {
+    let message: String
+
     var body: some View {
         HStack(spacing: 10) {
             ProgressView()
                 .tint(.white)
-            Text("Initializing pose tracking…")
+            Text(message)
                 .font(.callout.weight(.medium))
                 .foregroundStyle(.white)
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
         .background(Capsule().fill(Color.white.opacity(0.18)))
+    }
+}
+
+struct PrimingOverlay: View {
+    var body: some View {
+        VStack(spacing: 16) {
+            ProgressView()
+                .tint(.white)
+                .controlSize(.large)
+            Text("Get ready…")
+                .font(.title3.weight(.medium))
+                .foregroundStyle(.white.opacity(0.9))
+        }
+        .padding(40)
+        .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 28))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(.black.opacity(0.35))
     }
 }
 
