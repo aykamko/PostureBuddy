@@ -23,7 +23,7 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
     private let currentAngles = OSAllocatedUnfairLock<PostureAngles?>(initialState: nil)
     // Calibrated reference; nil until user taps Calibrate
     private let baseline = OSAllocatedUnfairLock<PostureAngles?>(initialState: nil)
-g 
+
     func updateOrientation(_ orientation: CGImagePropertyOrientation) {
         visionOrientation.withLock { $0 = orientation }
     }
