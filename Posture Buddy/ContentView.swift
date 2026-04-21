@@ -15,7 +15,7 @@ struct ContentView: View {
     @EnvironmentObject private var notificationManager: NotificationManager
 
     @Environment(\.scenePhase) private var scenePhase
-    @State private var isUpsideDown = false
+    @State private var isUpsideDown: Bool = UIDevice.current.orientation == .portraitUpsideDown
     @State private var countdown: Int? = nil
     @State private var isPriming = false
     @State private var countdownTask: Task<Void, Never>? = nil
@@ -23,9 +23,58 @@ struct ContentView: View {
     @State private var showTrackingFailedAlert = false
 
     private let countdownDuration = 5
-    private let trackingTimeoutSeconds: Double = 20
+    private let trackingTimeoutSeconds: Double = 30
 
     var body: some View {
+        mainContent
+        .animation(.easeInOut(duration: 0.3), value: isUpsideDown)
+        .animation(.easeInOut(duration: 0.2), value: countdown)
+        .animation(.easeInOut(duration: 0.2), value: isPriming)
+        .animation(.easeInOut(duration: 0.2), value: showTrackingFailedAlert)
+        .task {
+            poseEstimator.updateOrientation(visionOrientation(for: UIDevice.current.orientation))
+            UIApplication.shared.isIdleTimerDisabled = true
+            await cameraManager.requestAccessAndSetup()
+            cameraManager.setSampleBufferDelegate(poseEstimator)
+            cameraManager.start()
+            startTrackingTimeout()
+        }
+        .onChange(of: poseEstimator.isTrackingReady) { _, ready in
+            if ready {
+                trackingTimeoutTask?.cancel()
+                trackingTimeoutTask = nil
+            }
+        }
+        .onChange(of: poseEstimator.currentPose?.score?.value) {
+            guard poseEstimator.isCalibrated else { return }
+            notificationManager.update(score: poseEstimator.currentPose?.score)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
+            let deviceOrientation = UIDevice.current.orientation
+            let flipped = deviceOrientation == .portraitUpsideDown
+            isUpsideDown = flipped
+            poseEstimator.updateOrientation(visionOrientation(for: deviceOrientation))
+        }
+        .onChange(of: scenePhase) { _, phase in
+            switch phase {
+            case .active:
+                UIApplication.shared.isIdleTimerDisabled = true
+                cameraManager.start()
+                startTrackingTimeout()
+            case .background, .inactive:
+                UIApplication.shared.isIdleTimerDisabled = false
+                cameraManager.stop()
+                cancelCountdown()
+                trackingTimeoutTask?.cancel()
+                notificationManager.update(score: nil)
+            @unknown default:
+                break
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var mainContent: some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
@@ -97,52 +146,6 @@ struct ContentView: View {
                 }
                 .rotationEffect(isUpsideDown ? .degrees(180) : .zero)
                 .transition(.opacity)
-            }
-        }
-        .animation(.easeInOut(duration: 0.3), value: isUpsideDown)
-        .animation(.easeInOut(duration: 0.2), value: countdown)
-        .animation(.easeInOut(duration: 0.2), value: isPriming)
-        .task {
-            UIDevice.current.beginGeneratingDeviceOrientationNotifications()
-            isUpsideDown = UIDevice.current.orientation == .portraitUpsideDown
-            poseEstimator.updateOrientation(visionOrientation(for: UIDevice.current.orientation))
-            UIApplication.shared.isIdleTimerDisabled = true
-            await cameraManager.requestAccessAndSetup()
-            cameraManager.setSampleBufferDelegate(poseEstimator)
-            cameraManager.start()
-            startTrackingTimeout()
-        }
-        .onChange(of: poseEstimator.isTrackingReady) { _, ready in
-            if ready {
-                trackingTimeoutTask?.cancel()
-                trackingTimeoutTask = nil
-            }
-        }
-        .animation(.easeInOut(duration: 0.2), value: showTrackingFailedAlert)
-        .onChange(of: poseEstimator.currentPose?.score?.value) {
-            guard poseEstimator.isCalibrated else { return }
-            notificationManager.update(score: poseEstimator.currentPose?.score)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
-            let deviceOrientation = UIDevice.current.orientation
-            let flipped = deviceOrientation == .portraitUpsideDown
-            isUpsideDown = flipped
-            poseEstimator.updateOrientation(visionOrientation(for: deviceOrientation))
-        }
-        .onChange(of: scenePhase) { _, phase in
-            switch phase {
-            case .active:
-                UIApplication.shared.isIdleTimerDisabled = true
-                cameraManager.start()
-                startTrackingTimeout()
-            case .background, .inactive:
-                UIApplication.shared.isIdleTimerDisabled = false
-                cameraManager.stop()
-                cancelCountdown()
-                trackingTimeoutTask?.cancel()
-                notificationManager.update(score: nil)
-            @unknown default:
-                break
             }
         }
     }
