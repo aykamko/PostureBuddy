@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 *)",
+      "mcp__xcode__XcodeListWindows",
+      "mcp__xcode__XcodeListNavigatorIssues",
+      "mcp__xcode__GetBuildLog",
+      "mcp__xcode__DocumentationSearch"
+    ]
+  }
+}
