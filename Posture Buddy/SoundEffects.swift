@@ -22,6 +22,8 @@ final class SoundEffects {
     // Pre-generated buffers, populated asynchronously by configure()
     private var tickBuffers: [AVAudioPCMBuffer] = []
     private var captureBuffer: AVAudioPCMBuffer?
+    private var slouchBuffer: AVAudioPCMBuffer?   // descending "beep-boop" on poor posture
+    private var recoveryBuffer: AVAudioPCMBuffer? // ascending "boop-beep" on return to good posture
 
     // Rising C major scale fragment (F, G, A, B) resolving to C5 on capture.
     private static let tickFrequencies: [Float] = [
@@ -61,6 +63,16 @@ final class SoundEffects {
         shared.play(buffer: shared.captureBuffer)
     }
 
+    /// Quiet descending "beep-boop" — posture has slouched.
+    static func playSlouch() {
+        shared.play(buffer: shared.slouchBuffer)
+    }
+
+    /// Quiet ascending "boop-beep" — posture recovered.
+    static func playRecovery() {
+        shared.play(buffer: shared.recoveryBuffer)
+    }
+
     private func configure() {
         guard !audioSessionConfigured else { return }
         audioSessionConfigured = true
@@ -85,9 +97,21 @@ final class SoundEffects {
                 format: self.format,
                 sampleRate: self.sampleRate
             )
+            // G3 → C3 descending for slouch; C3 → G3 ascending for recovery.
+            // Quiet amplitude (0.15), short notes (180ms each), low register.
+            let slouch = Self.generateBeepPair(
+                firstFreq: 196.00, secondFreq: 130.81,  // G3, C3
+                format: self.format, sampleRate: self.sampleRate
+            )
+            let recovery = Self.generateBeepPair(
+                firstFreq: 130.81, secondFreq: 196.00,  // C3, G3
+                format: self.format, sampleRate: self.sampleRate
+            )
             DispatchQueue.main.async {
                 self.tickBuffers = ticks
                 self.captureBuffer = capture
+                self.slouchBuffer = slouch
+                self.recoveryBuffer = recovery
             }
         }
     }
@@ -120,6 +144,57 @@ final class SoundEffects {
         buffer.frameLength = frameCount
         if let data = buffer.floatChannelData?[0] {
             for i in 0..<Int(frameCount) { data[i] = 0 }
+        }
+        return buffer
+    }
+
+    /// Synthesizes two short sine-based notes back-to-back with a small gap.
+    /// Used for posture-state feedback (descending = slouch, ascending = recovery).
+    /// Simpler timbre than marimba (no clink harmonic) — meant to be subtle.
+    private static func generateBeepPair(
+        firstFreq: Float,
+        secondFreq: Float,
+        noteDuration: Float = 0.18,
+        gap: Float = 0.03,
+        amplitude: Float = 0.15,
+        format: AVAudioFormat,
+        sampleRate: Double
+    ) -> AVAudioPCMBuffer? {
+        let totalDuration = noteDuration * 2 + gap
+        let frameCount = AVAudioFrameCount(Double(totalDuration) * sampleRate)
+        guard frameCount > 0,
+              let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount)
+        else { return nil }
+        buffer.frameLength = frameCount
+        guard let data = buffer.floatChannelData?[0] else { return nil }
+
+        let noteFrames = Int(noteDuration * Float(sampleRate))
+        let gapFrames = Int(gap * Float(sampleRate))
+        let twoPiOverSR = 2.0 * Float.pi / Float(sampleRate)
+
+        for i in 0..<Int(frameCount) {
+            var sample: Float = 0
+            if i < noteFrames {
+                let localIdx = i
+                let t = Float(localIdx) / Float(sampleRate)
+                let phase = twoPiOverSR * firstFreq * Float(localIdx)
+                // Softer envelope than marimba — shaped like a gentle beep (fade-in + exp decay)
+                let fadeIn = min(1, t / 0.02)
+                let env = fadeIn * expf(-3.0 * t / noteDuration)
+                let fundamental = sinf(phase)
+                let h2 = 0.3 * sinf(phase * 2.0)
+                sample = amplitude * env * (fundamental + h2)
+            } else if i >= noteFrames + gapFrames {
+                let localIdx = i - (noteFrames + gapFrames)
+                let t = Float(localIdx) / Float(sampleRate)
+                let phase = twoPiOverSR * secondFreq * Float(localIdx)
+                let fadeIn = min(1, t / 0.02)
+                let env = fadeIn * expf(-3.0 * t / noteDuration)
+                let fundamental = sinf(phase)
+                let h2 = 0.3 * sinf(phase * 2.0)
+                sample = amplitude * env * (fundamental + h2)
+            }
+            data[i] = sample
         }
         return buffer
     }

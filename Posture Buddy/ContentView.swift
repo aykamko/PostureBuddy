@@ -12,6 +12,7 @@ import AudioToolbox
 struct ContentView: View {
     @StateObject private var cameraManager = CameraManager()
     @StateObject private var poseEstimator = PoseEstimator()
+    @StateObject private var soundCoach = PostureSoundCoach()
     @EnvironmentObject private var notificationManager: NotificationManager
 
     @Environment(\.scenePhase) private var scenePhase
@@ -47,7 +48,9 @@ struct ContentView: View {
         }
         .onChange(of: poseEstimator.currentPose?.score?.value) {
             guard poseEstimator.isCalibrated else { return }
-            notificationManager.update(score: poseEstimator.currentPose?.score)
+            let score = poseEstimator.currentPose?.score
+            notificationManager.update(score: score)
+            soundCoach.update(score: score)
         }
         .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
             let deviceOrientation = UIDevice.current.orientation
@@ -67,6 +70,7 @@ struct ContentView: View {
                 cancelCountdown()
                 trackingTimeoutTask?.cancel()
                 notificationManager.update(score: nil)
+                soundCoach.reset()
             @unknown default:
                 break
             }
@@ -180,6 +184,7 @@ struct ContentView: View {
             UINotificationFeedbackGenerator().notificationOccurred(.success)
             SoundEffects.playCapture()
             poseEstimator.calibrate()
+            soundCoach.reset()
             // Hold "1" briefly so the capture moment is visible, then dismiss
             try? await Task.sleep(for: .seconds(0.6))
             if !Task.isCancelled { countdown = nil }
