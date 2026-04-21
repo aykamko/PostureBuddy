@@ -8,9 +8,8 @@
       "mcp__xcode__DocumentationSearch",
       "mcp__xcode__BuildProject",
       "Bash(chmod +x *)",
-      "Bash(/Users/aleks/projects/Posture Buddy/run.sh *)",
-      "Bash('/Users/aleks/projects/Posture Buddy/run.sh' *)",
-      "Bash(run.sh *)"
+      "Bash(\"/Users/aleks/projects/Posture Buddy/run.sh\" *)",
+      "Bash(\"/Users/aleks/projects/Posture Buddy/run.sh\")"
     ]
   }
 }

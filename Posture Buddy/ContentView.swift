@@ -158,14 +158,14 @@ struct ScoreHUDView: View {
     var body: some View {
         ZStack {
             Circle()
-                .stroke(gradeColor, lineWidth: 5)
-                .frame(width: 72, height: 72)
-            VStack(spacing: 1) {
+                .stroke(gradeColor, lineWidth: 7)
+                .frame(width: 108, height: 108)
+            VStack(spacing: 2) {
                 Text(label)
-                    .font(.title2.bold())
+                    .font(.system(size: 36, weight: .bold))
                     .foregroundStyle(.white)
                 Text(isCalibrated ? "score" : "ready")
-                    .font(.caption2)
+                    .font(.caption)
                     .foregroundStyle(.white.opacity(0.7))
             }
         }
@@ -190,13 +190,14 @@ struct CalibrateButton: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 8) {
+            HStack(spacing: 14) {
                 Image(systemName: icon)
-                Text(label).font(.callout.weight(.semibold))
+                    .font(.title2)
+                Text(label).font(.title2.weight(.semibold))
             }
             .foregroundStyle(.white)
-            .padding(.horizontal, 18)
-            .padding(.vertical, 12)
+            .padding(.horizontal, 36)
+            .padding(.vertical, 24)
             .background(Capsule().fill(background))
         }
     }
