@@ -265,14 +265,43 @@ struct YawCalibration {
         return best
     }
 
-    /// Returns the nearest baseline within `classificationThreshold`, or nil if the
-    /// frame is too far from all three (caller pauses scoring).
-    func classify(_ sig: YawSignature) -> CalibrationPosition? {
-        let options: [(CalibrationPosition, YawSignature)] = [
-            (.middle, middle), (.left, left), (.right, right)
-        ]
-        let best = options.min { sig.distance(to: $0.1) < sig.distance(to: $1.1) }!
-        return sig.distance(to: best.1) <= classificationThreshold ? best.0 : nil
+    /// Diagnostic classification: distances to every baseline, which one is closest,
+    /// the threshold, and whether the frame was accepted. Analyzer uses
+    /// `.acceptedPosition`; logs consume the rest.
+    func classify(_ sig: YawSignature) -> YawClassification {
+        let dM = sig.distance(to: middle)
+        let dL = sig.distance(to: left)
+        let dR = sig.distance(to: right)
+        let pairs: [(CalibrationPosition, Float)] = [(.middle, dM), (.left, dL), (.right, dR)]
+        let best = pairs.min { $0.1 < $1.1 }!
+        return YawClassification(
+            middleDistance: dM,
+            leftDistance: dL,
+            rightDistance: dR,
+            closest: best.0,
+            closestDistance: best.1,
+            threshold: classificationThreshold
+        )
+    }
+}
+
+struct YawClassification {
+    let middleDistance: Float
+    let leftDistance: Float
+    let rightDistance: Float
+    let closest: CalibrationPosition
+    let closestDistance: Float
+    let threshold: Float
+
+    var accepted: Bool { closestDistance <= threshold }
+    var acceptedPosition: CalibrationPosition? { accepted ? closest : nil }
+
+    var debugString: String {
+        String(
+            format: "m=%.3f l=%.3f r=%.3f thr=%.3f → %@ %@",
+            middleDistance, leftDistance, rightDistance, threshold,
+            closest.rawValue, accepted ? "✓" : "✗"
+        )
     }
 }
 

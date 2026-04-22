@@ -120,7 +120,7 @@ final class CalibrationController: ObservableObject {
             return nil
         }
         let telemetry = poseEstimator.snapshotCurrentTelemetry()?.debugString ?? "n/a"
-        print("[YawTelemetry] \(step.voice.rawValue): \(telemetry)")
+        Log.line("[YawTelemetry]", "\(step.voice.rawValue): \(telemetry)")
 
         try await Task.sleep(for: Self.captureHoldAfterBeat)
         countdown = nil

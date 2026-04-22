@@ -38,7 +38,7 @@ nonisolated struct PostureAnalyzer {
         guard
             let telemetry = current.yawTelemetry,
             let sig = baselines.yaw.selection.signature(from: telemetry),
-            let position = baselines.yaw.classify(sig)
+            let position = baselines.yaw.classify(sig).acceptedPosition
         else { return nil }
 
         let matched: PostureAngles

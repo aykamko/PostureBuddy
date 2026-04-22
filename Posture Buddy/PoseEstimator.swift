@@ -24,6 +24,7 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
     private let emaState = OSAllocatedUnfairLock(initialState: Float(100))
     private let visionOrientation = OSAllocatedUnfairLock(initialState: CGImagePropertyOrientation.leftMirrored)
     private let lastLogTime = OSAllocatedUnfairLock(initialState: CFTimeInterval(0))
+    private let lastLogState = OSAllocatedUnfairLock<FrameLogState>(initialState: .noValidSide)
 
     // Most-recent per-frame angles (for calibration capture)
     private let currentAngles = OSAllocatedUnfairLock<PostureAngles?>(initialState: nil)
@@ -32,6 +33,15 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
     private let currentTelemetry = OSAllocatedUnfairLock<YawTelemetry?>(initialState: nil)
     // Calibrated references (middle / left / right); nil until user completes calibration
     private let baselines = OSAllocatedUnfairLock<PostureBaselines?>(initialState: nil)
+
+    /// What we last logged for a frame. Used to force a log line on state transitions
+    /// (scored ↔ paused ↔ awaiting) regardless of the 2s throttle — so flutter is visible.
+    nonisolated enum FrameLogState: Equatable {
+        case scored(grade: PostureScore.Grade, position: CalibrationPosition)
+        case paused
+        case awaitingCalibration
+        case noValidSide
+    }
 
     func updateOrientation(_ orientation: CGImagePropertyOrientation) {
         visionOrientation.withLock { $0 = orientation }
@@ -80,13 +90,16 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
         baselines.withLock { $0 = b }
         emaState.withLock { $0 = 100 }
         isCalibrated = true
-        print(
-            "[Posture] calibrated  selection=(\(yawCal.selection.direction.rawValue), "
+        lastLogState.withLock { $0 = .awaitingCalibration }  // force next frame to log as a transition
+        Log.line(
+            "[Posture]",
+            "calibrated  selection=(\(yawCal.selection.direction.rawValue), "
             + "\(yawCal.selection.frontality.rawValue))  "
             + "threshold=\(String(format: "%.3f", yawCal.classificationThreshold))  "
             + "minPair=\(String(format: "%.3f", yawCal.minPairwiseDistance))"
         )
-        print(
+        Log.line(
+            "[Posture]",
             "  middle=\(yawCal.middle.debugString)  "
             + "left=\(yawCal.left.debugString)  "
             + "right=\(yawCal.right.debugString)"
@@ -113,15 +126,34 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
 
         let currentBaselines = baselines.withLock { $0 }
         let scored = scoreFrame(angles: angles, baselines: currentBaselines)
-        let runtimeSig = telemetry.flatMap { currentBaselines?.yaw.selection.signature(from: $0) }
 
-        if lastLogTime.shouldFire(now: now, minInterval: 2.0) {
+        // Reproject the current frame through the calibrated selection for logging.
+        let runtimeSig = telemetry.flatMap { currentBaselines?.yaw.selection.signature(from: $0) }
+        let classification = runtimeSig.flatMap { sig in currentBaselines.map { $0.yaw.classify(sig) } }
+
+        let state: FrameLogState
+        if let scored {
+            state = .scored(grade: scored.score.grade, position: scored.position)
+        } else if currentBaselines != nil, angles != nil {
+            state = .paused
+        } else if angles != nil {
+            state = .awaitingCalibration
+        } else {
+            state = .noValidSide
+        }
+
+        let stateChanged = lastLogState.withLock { last in
+            let changed = last != state
+            last = state
+            return changed
+        }
+        if stateChanged || lastLogTime.shouldFire(now: now, minInterval: 2.0) {
             logFrame(
+                state: state,
                 yaw: runtimeSig,
+                classification: classification,
                 score: scored?.score,
-                position: scored?.position,
-                hasAngles: angles != nil,
-                hasBaselines: currentBaselines != nil
+                position: scored?.position
             )
         }
 
@@ -176,21 +208,31 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
     }
 
     nonisolated private func logFrame(
+        state: FrameLogState,
         yaw: YawSignature?,
+        classification: YawClassification?,
         score: PostureScore?,
-        position: CalibrationPosition?,
-        hasAngles: Bool,
-        hasBaselines: Bool
+        position: CalibrationPosition?
     ) {
         let yawStr = yaw?.debugString ?? "n/a"
-        if let score, let position {
-            print("[Posture] score=\(String(format: "%.1f", score.value)) [\(score.grade.label)] mode=\(position.rawValue) yaw=\(yawStr)")
-        } else if hasBaselines && hasAngles {
-            print("[Posture] paused — head position not recognized  yaw=\(yawStr)")
-        } else if hasAngles {
-            print("[Posture] angles available; awaiting calibration  yaw=\(yawStr)")
-        } else {
-            print("[Posture] no valid keypoints")
+        let clsStr = classification?.debugString ?? "n/a"
+        switch state {
+        case .scored:
+            guard let score, let position else { return }
+            Log.line(
+                "[Posture]",
+                "score=\(String(format: "%.1f", score.value)) [\(score.grade.label)] "
+                + "mode=\(position.rawValue)  yaw=\(yawStr)  cls=\(clsStr)"
+            )
+        case .paused:
+            Log.line(
+                "[Posture]",
+                "paused — head position not recognized  yaw=\(yawStr)  cls=\(clsStr)"
+            )
+        case .awaitingCalibration:
+            Log.line("[Posture]", "angles available; awaiting calibration  yaw=\(yawStr)")
+        case .noValidSide:
+            Log.line("[Posture]", "no valid keypoints")
         }
     }
 
