@@ -293,14 +293,15 @@ struct YawClassification {
     let closestDistance: Float
     let threshold: Float
 
-    var accepted: Bool { closestDistance <= threshold }
-    var acceptedPosition: CalibrationPosition? { accepted ? closest : nil }
+    // Informational — whether the nearest baseline is within the calibration-derived
+    // acceptance radius. Surfaced in logs as ✓/✗ for quick scanning; no longer gates scoring.
+    var isHighConfidence: Bool { closestDistance <= threshold }
 
     var debugString: String {
         String(
-            format: "m=%.3f l=%.3f r=%.3f thr=%.3f → %@ %@",
-            middleDistance, leftDistance, rightDistance, threshold,
-            closest.rawValue, accepted ? "✓" : "✗"
+            format: "m=%.3f l=%.3f r=%.3f → %@ %@",
+            middleDistance, leftDistance, rightDistance,
+            closest.rawValue, isHighConfidence ? "✓" : "✗"
         )
     }
 }

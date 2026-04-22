@@ -26,19 +26,17 @@ nonisolated struct PostureAnalyzer {
         )
     }
 
-    /// Classifies the provided (typically EMA-smoothed) yaw signature against the
-    /// calibrated baselines and scores the frame's ear/hip angles against the matching
-    /// baseline. Returns nil when the signature is too far from all three baselines
-    /// (head in an uncalibrated pose) — callers treat nil as "pause scoring".
-    /// The caller is responsible for projecting telemetry → signature and for any
-    /// smoothing; passing a raw per-frame signature was producing classification
-    /// thrash near baseline boundaries.
+    /// Classifies `sig` to the nearest baseline and scores the frame's ear/hip angles
+    /// against it. Never pauses on yaw — all three baselines are calibrated upright,
+    /// so a large ear-shoulder deviation produces a low score regardless of which
+    /// baseline we snap to. The threshold on the returned classification is
+    /// informational only (surfaced in logs as ✓/✗).
     func score(
         current: PostureAngles,
         baselines: PostureBaselines,
         yawSignature sig: YawSignature
     ) -> (score: PostureScore, position: CalibrationPosition)? {
-        guard let position = baselines.yaw.classify(sig).acceptedPosition else { return nil }
+        let position = baselines.yaw.classify(sig).closest
 
         let matched: PostureAngles
         switch position {
