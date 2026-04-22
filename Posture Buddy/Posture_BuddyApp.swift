@@ -43,6 +43,7 @@ struct Posture_BuddyApp: App {
                 .task {
                     SoundEffects.configureAudioSession()
                     await notificationManager.requestNotificationPermission()
+                    _ = WatchBridge.shared  // activate WCSession at launch
                 }
         }
     }

@@ -6,11 +6,45 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		5500CE392F98728000F7F7F5 /* Posture Buddy Watch Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 5500CE2F2F98727F00F7F7F5 /* Posture Buddy Watch Watch App.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		5500CE372F98728000F7F7F5 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 55A8C9102F96E9830010C460 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 5500CE2E2F98727F00F7F7F5;
+			remoteInfo = "Posture Buddy Watch Watch App";
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		5500CE182F9871E800F7F7F5 /* Embed Watch Content */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
+			dstSubfolderSpec = 16;
+			files = (
+				5500CE392F98728000F7F7F5 /* Posture Buddy Watch Watch App.app in Embed Watch Content */,
+			);
+			name = "Embed Watch Content";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
+		5500CE2F2F98727F00F7F7F5 /* Posture Buddy Watch Watch App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Posture Buddy Watch Watch App.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		55A8C9182F96E9830010C460 /* Posture Buddy.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Posture Buddy.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		5500CE302F98727F00F7F7F5 /* Posture Buddy Watch Watch App */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "Posture Buddy Watch Watch App";
+			sourceTree = "<group>";
+		};
 		55A8C91A2F96E9830010C460 /* Posture Buddy */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = "Posture Buddy";
@@ -19,6 +53,13 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		5500CE2C2F98727F00F7F7F5 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		55A8C9152F96E9830010C460 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -33,6 +74,7 @@
 			isa = PBXGroup;
 			children = (
 				55A8C91A2F96E9830010C460 /* Posture Buddy */,
+				5500CE302F98727F00F7F7F5 /* Posture Buddy Watch Watch App */,
 				55A8C9192F96E9830010C460 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -41,6 +83,7 @@
 			isa = PBXGroup;
 			children = (
 				55A8C9182F96E9830010C460 /* Posture Buddy.app */,
+				5500CE2F2F98727F00F7F7F5 /* Posture Buddy Watch Watch App.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -48,6 +91,28 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		5500CE2E2F98727F00F7F7F5 /* Posture Buddy Watch Watch App */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 5500CE3A2F98728000F7F7F5 /* Build configuration list for PBXNativeTarget "Posture Buddy Watch Watch App" */;
+			buildPhases = (
+				5500CE2B2F98727F00F7F7F5 /* Sources */,
+				5500CE2C2F98727F00F7F7F5 /* Frameworks */,
+				5500CE2D2F98727F00F7F7F5 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				5500CE302F98727F00F7F7F5 /* Posture Buddy Watch Watch App */,
+			);
+			name = "Posture Buddy Watch Watch App";
+			packageProductDependencies = (
+			);
+			productName = "Posture Buddy Watch Watch App";
+			productReference = 5500CE2F2F98727F00F7F7F5 /* Posture Buddy Watch Watch App.app */;
+			productType = "com.apple.product-type.application";
+		};
 		55A8C9172F96E9830010C460 /* Posture Buddy */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 55A8C9232F96E9850010C460 /* Build configuration list for PBXNativeTarget "Posture Buddy" */;
@@ -55,10 +120,12 @@
 				55A8C9142F96E9830010C460 /* Sources */,
 				55A8C9152F96E9830010C460 /* Frameworks */,
 				55A8C9162F96E9830010C460 /* Resources */,
+				5500CE182F9871E800F7F7F5 /* Embed Watch Content */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				5500CE382F98728000F7F7F5 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				55A8C91A2F96E9830010C460 /* Posture Buddy */,
@@ -80,6 +147,9 @@
 				LastSwiftUpdateCheck = 2640;
 				LastUpgradeCheck = 2640;
 				TargetAttributes = {
+					5500CE2E2F98727F00F7F7F5 = {
+						CreatedOnToolsVersion = 26.4.1;
+					};
 					55A8C9172F96E9830010C460 = {
 						CreatedOnToolsVersion = 26.4.1;
 					};
@@ -100,11 +170,19 @@
 			projectRoot = "";
 			targets = (
 				55A8C9172F96E9830010C460 /* Posture Buddy */,
+				5500CE2E2F98727F00F7F7F5 /* Posture Buddy Watch Watch App */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		5500CE2D2F98727F00F7F7F5 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		55A8C9162F96E9830010C460 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -115,6 +193,13 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		5500CE2B2F98727F00F7F7F5 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		55A8C9142F96E9830010C460 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -124,7 +209,81 @@
 		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		5500CE382F98728000F7F7F5 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 5500CE2E2F98727F00F7F7F5 /* Posture Buddy Watch Watch App */;
+			targetProxy = 5500CE372F98728000F7F7F5 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
+		5500CE3B2F98728000F7F7F5 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = ZC95DNC67Z;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Posture Buddy Watch";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = "akamko.Posture-Buddy";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "akamko.Posture-Buddy.watchkitapp";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 26.4;
+			};
+			name = Debug;
+		};
+		5500CE3C2F98728000F7F7F5 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = ZC95DNC67Z;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Posture Buddy Watch";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = "akamko.Posture-Buddy";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "akamko.Posture-Buddy.watchkitapp";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 26.4;
+			};
+			name = Release;
+		};
 		55A8C9212F96E9850010C460 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -323,6 +482,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		5500CE3A2F98728000F7F7F5 /* Build configuration list for PBXNativeTarget "Posture Buddy Watch Watch App" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				5500CE3B2F98728000F7F7F5 /* Debug */,
+				5500CE3C2F98728000F7F7F5 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		55A8C9132F96E9830010C460 /* Build configuration list for PBXProject "Posture Buddy" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

@@ -52,6 +52,7 @@ final class PostureSoundCoach: ObservableObject {
                 self?.isAlerted = false
                 Log.line("[Coach]", "🔊 playing recovery sound")
                 SoundEffects.playRecovery()
+                WatchBridge.shared.notify(.recovery)
             }
 
         case .fair, .poor:
@@ -68,6 +69,7 @@ final class PostureSoundCoach: ObservableObject {
                 self?.isAlerted = true
                 Log.line("[Coach]", "🔊 playing slouch sound")
                 SoundEffects.playSlouch()
+                WatchBridge.shared.notify(.slouchCoach)
             }
         }
     }
