@@ -109,7 +109,11 @@ struct ContentView: View {
                             if calibration.isActive {
                                 calibration.cancel()
                             } else {
-                                calibration.start(poseEstimator: poseEstimator, soundCoach: soundCoach)
+                                calibration.start(
+                                    poseEstimator: poseEstimator,
+                                    soundCoach: soundCoach,
+                                    notificationManager: notificationManager
+                                )
                             }
                         }
                     } else {

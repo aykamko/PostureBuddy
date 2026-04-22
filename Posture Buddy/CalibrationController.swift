@@ -29,9 +29,18 @@ final class CalibrationController: ObservableObject {
     ]
 
     /// Starts a fresh guided calibration. If one was already running, it's cancelled first.
+    /// Discards any existing calibration and quiets in-flight slouch/recovery timers +
+    /// the pending-alert banner so nothing fires while the user is repositioning.
     /// On success, commits three baselines to the pose estimator and resets the sound coach.
-    func start(poseEstimator: PoseEstimator, soundCoach: PostureSoundCoach) {
+    func start(
+        poseEstimator: PoseEstimator,
+        soundCoach: PostureSoundCoach,
+        notificationManager: NotificationManager
+    ) {
         task?.cancel()
+        poseEstimator.resetCalibration()
+        soundCoach.reset()
+        notificationManager.update(score: nil)
         instruction = "Get ready…"
         task = Task { @MainActor in
             do {

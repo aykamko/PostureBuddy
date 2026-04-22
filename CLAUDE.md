@@ -11,38 +11,42 @@ iOS app that monitors sitting posture in real time using the front camera. The u
 
 ### Scoring: 3-position calibration + head-yaw-aware classification
 - 2D pose can't separate "bad posture" from "weird camera angle" or "head turned". Rotating your head ~30° toward the screen shifts the ear's 2D position enough to tank the score even with perfect torso posture.
-- Solution: guided calibration at **three head positions** — middle, left, right edge of screen. Each baseline captures `earShoulderAngle`, `shoulderHipAngle?`, and a 2-component `YawSignature` (see below).
-- At runtime: the current frame's `YawSignature` is matched to the closest baseline by **2D Euclidean distance**; scoring is done against that baseline's angles. If the closest distance is more than `yawClassificationThreshold` (0.2 currently) from all three baselines (head turned too far, looking up/down, etc.), or if no face was detected at all, we return **nil** from the analyzer and **pause scoring** rather than produce a misleading number.
+- Solution: guided calibration at **three head positions** — middle, left, right edge of screen. Each baseline captures `earShoulderAngle`, `shoulderHipAngle?`, and a raw `YawTelemetry` (bundle of candidate yaw features). At the end of calibration we pick the two features that best separate the three positions (see below).
+- At runtime: the current frame's telemetry is projected into the selected feature pair, producing a `YawSignature`. That's matched to the closest baseline by **2D Euclidean distance**; scoring is done against that baseline's angles. If the closest distance is more than the **per-calibration** `classificationThreshold` (= half the minimum pairwise distance among the three baselines), or the frame has no telemetry (no face), or the selected features aren't populated in the frame, we return **nil** and **pause scoring** rather than produce a misleading number.
 - Side-profile scoring uses **same-side joints** (ear→shoulder→hip). Centerline joints (nose, neck, root) are anatomically offset from the visible shoulder and produce non-zero angles even in perfect posture, so they're not used for the score itself.
 - Hip often isn't visible (desk occludes it); scoring falls back to ear-shoulder alone when that's the case.
 
-### Head-yaw classification: 2-component signature
-Yaw in our side-profile setup isn't one-dimensional. A single scalar (direction or frontality alone) collapses "clean side profile" and "3/4 view toward camera" into the same value because they're near the same bbox-midline offset. `YawSignature` is a pair of features:
+### Head-yaw classification: adaptive 2-feature selection
+Yaw in our side-profile setup isn't one-dimensional. A single scalar (any direction *or* frontality measure alone) collapses at least one pair of positions — e.g. "middle" and "left" often share the same median-line offset, while "middle" and "right" share the same face-contour width. Which failure mode hits depends on the camera angle + the user's anatomy, so we pick the feature pair adaptively instead of hardcoding one.
 
-- **`direction`** (~[-0.5, +0.5]): face median-line x-offset within the bbox, computed as `mean(medianLine.normalizedPoints.x) - 0.5`. Falls back to `noseCrest` if `medianLine` isn't populated. Captures left/right head rotation.
-- **`frontality`** ([0, 1]): `min(leftEar.confidence, rightEar.confidence) / max(...)` from the body-pose model. Near 0 = deep profile (only one ear visible), near 1 = head turned toward camera enough that both ears are detected. Captures how much of the face is visible — the critical signal that separates positions that share a direction.
-
-Classification uses `YawSignature.distance(to:)` (plain Euclidean). Baselines and thresholds live in an unnormalized space; if in practice one axis dominates because its variance swamps the other, weight/scale one side before adding.
+- **`YawTelemetry`** (in `PostureModels.swift`) is a per-frame bundle of candidate features, computed from the face observation + body observation. Populated in `PoseEstimator.captureOutput`, logged at each calibration capture for tuning. Currently included:
+  - Direction candidates (bbox-local x-offset of a midline feature, range ~[-0.5, +0.5]): `medianLine`, `noseCrest`, `noseCentroid` (full `nose` region centroid).
+  - Frontality candidates (how much of the face is visible): `eyeSepOverH` (leftEye↔rightEye centroid distance ÷ bbox height), `contourSpreadOverH` (faceContour x-spread ÷ bbox height), `allLandmarksSpreadLocal` (x-spread across every landmark, bbox-local).
+  - A few ignored-but-still-logged fields for reference (bboxAspect, raw spreads, ear-confidence ratio) — see Gotchas for why they're dead.
+- **`YawCalibration.make(...)`** runs at calibration commit. It tries every (DirectionFeature × FrontalityFeature) pair, computes the three baseline `YawSignature`s for that pair, and scores the pair by `min(d(middle,left), d(left,right), d(middle,right))` in raw (unnormalized) feature space. The winning pair is the one whose three baseline points have the largest minimum pairwise distance — i.e. the most reliably discriminative pair for this user + camera setup. The chosen `classificationThreshold = minPair * 0.5` gives each baseline a Voronoi-ish acceptance radius that can't overlap its neighbors.
+- **`YawSelection.signature(from: telemetry)`** at runtime extracts the same two features from the current frame so it can be compared to the baselines. Returns nil if either feature is missing in the frame.
+- **No normalization.** Features are compared in their raw units (all are bbox-width or bbox-height fractions, roughly comparable scales). Normalizing by spread would amplify noise on low-signal axes — don't do it without thinking.
 
 ### Head-yaw detection: VNDetectFaceLandmarksRequest
-- Runs alongside `VNDetectHumanBodyPoseRequest` per frame. Face landmarks provide the `direction` component; body-pose ear confidences provide `frontality`. Both are packed into a `YawSignature` in `PoseEstimator.captureOutput`.
+- Runs alongside `VNDetectHumanBodyPoseRequest` per frame. Face landmarks drive every direction candidate and most frontality candidates; body-pose observations only contribute the (mostly dead) ear-confidence ratio. All candidates are packed into a `YawTelemetry` in `PoseEstimator.captureOutput`.
 - **Do NOT use `VNFaceObservation.yaw` directly.** Despite Apple's docs claiming revision 3+ gives continuous values, in practice `yaw` is still quantized to 45° buckets (-π/4, -π/2, etc.) for side-profile faces on iOS 26. Observed: "middle" and "right" calibration positions both returned exactly -0.785 rad (-45°), making them indistinguishable. The quantization makes `yaw` unusable for 3-position classification.
 - Revision is still set to `currentRevision` for landmark detection itself; we just don't read the `yaw` property anymore.
 - Face landmarks are also rendered on the overlay as **cyan** dots + bounding box for debugging — distinguishable from the white body keypoints. See `PostureOverlayView.swift`.
-- Landmark points are in `VNFaceLandmarkRegion2D.normalizedPoints`, which are *bounding-box-local* (0-1 within the face rect). `extractFaceLandmarks(from:)` converts them to image-normalized coords so they share the skeleton's coordinate system (needed for drawing, not for the yaw `direction` signal which uses bbox-local coords).
+- Landmark points are in `VNFaceLandmarkRegion2D.normalizedPoints`, which are *bounding-box-local* (0-1 within the face rect). `extractFaceLandmarks(from:)` converts them to image-normalized coords so they share the skeleton's coordinate system (needed for drawing, not for yaw features which use bbox-local coords directly).
 
 ### Guided calibration flow
 Owned by `CalibrationController` (a `@MainActor` `ObservableObject`). The controller publishes `instruction: String?` and `countdown: Int?`; `ContentView` observes those and renders `GuidedCalibrationOverlay`. All flow logic — voice prompts, marimba ticks, haptics, snapshot capture, cancellation — lives in the controller so `ContentView` only composes views.
 
-- Triggered by **Set Baseline Posture** (or Recalibrate), which calls `calibration.start(poseEstimator:, soundCoach:)`. Flow:
-  1. Audio pipeline prime (1s silent buffer) + "Get ready…" spinner
-  2. Voice: *"Let's calibrate. Please sit up straight."*
-  3. For middle / left / right:
+- Triggered by **Set Baseline Posture** (or Recalibrate), which calls `calibration.start(poseEstimator:, soundCoach:, notificationManager:)`. Flow:
+  1. Reset: discard existing baselines (`poseEstimator.resetCalibration()`), cancel slouch/recovery timers (`soundCoach.reset()`), and clear the pending-alert banner (`notificationManager.update(score: nil)`). This stops scoring + any in-flight coaching sounds so they can't fire mid-calibration. Consequence: cancelling calibration leaves the app uncalibrated — there's no "restore previous baselines" path.
+  2. Audio pipeline prime (1s silent buffer) + "Get ready…" spinner
+  3. Voice: *"Let's calibrate. Please sit up straight."*
+  4. For middle / left / right:
      - Voice: *"First, look at the middle of your screen."* → *"Next, look at the left of your screen."* → *"Last, look at the right of your screen."*
      - 3-beat marimba countdown (3, 2, 1) with tick + capture sounds
      - Snapshot `PostureAngles` at count=1
-  4. Voice: *"Calibration is complete."*
-- Cancel button (the calibrate button goes red during calibration) calls `calibration.cancel()` — cancels the controller's task, stops voice, reverts UI. Previous baselines stay intact.
+  5. Voice: *"Calibration is complete."*
+- Cancel button (the calibrate button goes red during calibration) calls `calibration.cancel()` — cancels the controller's task, stops voice, reverts UI. Baselines remain discarded (reset at step 1); user must re-run calibration before scoring resumes.
 - If `snapshotCurrentAngles()` returns nil at any capture moment (no valid pose), the flow aborts with *"Couldn't detect your pose. Please try again."*
 - The controller's run-flow uses `try Task.checkCancellation()` + `try await Task.sleep(for:)` with a single `do/catch cleanup()` wrapper. Don't add manual `if Task.isCancelled { … }` guards — the throwing path already handles them.
 
@@ -83,7 +87,7 @@ Workflow:
 - `AVCaptureVideoDataOutputSampleBufferDelegate.captureOutput` MUST be marked `nonisolated` or frames get dispatched to main, defeating the background video queue and blocking the UI.
 - Shared background state (orientation, last-processed-time, smoothed score, current angles, baseline) is protected with `OSAllocatedUnfairLock`.
 - Static `let` constants used from `nonisolated` methods must be explicitly `nonisolated static let`.
-- **Types used from `captureOutput` must opt out of MainActor too.** `PostureAnalyzer` and `YawSignature` are declared `nonisolated struct` so all their methods are callable on the video queue without per-method annotations. Same goes for extension methods intended for background use (e.g. the `OSAllocatedUnfairLock.shouldFire` throttle helper in `PoseEstimator.swift` is `nonisolated`).
+- **Types used from `captureOutput` must opt out of MainActor too.** `PostureAnalyzer`, `YawSignature`, and `YawTelemetry` are declared `nonisolated struct` so all their methods are callable on the video queue without per-method annotations. Same goes for extension methods intended for background use (e.g. the `OSAllocatedUnfairLock.shouldFire` throttle helper in `PoseEstimator.swift` is `nonisolated`).
 
 ### Audio: synthesized marimba-like tones
 - No bundled sound files. `SoundEffects.swift` generates tones at runtime using `AVAudioEngine` + `AVAudioPCMBuffer` + a simple additive synthesis (fundamental + octave + fast-decaying inharmonic "clink").
@@ -111,7 +115,8 @@ Posture Buddy/
 ├── PoseEstimator.swift                 Runs VNDetectHumanBodyPoseRequest on videoQueue; publishes DetectedPose
 ├── PostureAnalyzer.swift               Pure math: picks best side, computes angles, scores vs baseline
 ├── PostureModels.swift                 Data types: DetectedPose, FaceLandmarks, PostureScore/Grade,
-│                                       PostureAngles, YawSignature (+ factory), PostureBaselines
+│                                       PostureAngles, YawTelemetry, YawSignature, DirectionFeature,
+│                                       FrontalityFeature, YawSelection, YawCalibration, PostureBaselines
 ├── PostureGrade+UI.swift               SwiftUI-bridge: PostureScore.Grade.swiftUIColor
 ├── PostureOverlayView.swift            SwiftUI Canvas drawing skeleton + face landmarks
 ├── CalibrationController.swift         @MainActor ObservableObject driving the guided-calibration flow
@@ -143,10 +148,12 @@ AVCaptureSession (front camera, BGRA)
     ▼
 PoseEstimator.captureOutput (nonisolated, 10 FPS throttled)
     │  VNDetectHumanBodyPoseRequest → VNHumanBodyPoseObservation (body keypoints + ear confidences)
-    │  VNDetectFaceLandmarksRequest → VNFaceObservation (medianLine landmarks, ignore .yaw)
-    │  → YawSignature(direction: medianLine offset, frontality: ear-confidence ratio)
-    │  PostureAnalyzer.computeAngles(observation, yawSignature:) → PostureAngles
-    │  PostureAnalyzer.score(current, baselines) → (PostureScore, position)?  (only if calibrated AND 2D yaw distance < threshold)
+    │  VNDetectFaceLandmarksRequest → VNFaceObservation (face landmarks, ignore .yaw)
+    │  → YawTelemetry(all candidate direction + frontality features)
+    │  PostureAnalyzer.computeAngles(observation, yawTelemetry:) → PostureAngles
+    │  PostureAnalyzer.score(current, baselines) → (PostureScore, position)?
+    │    (projects telemetry via baselines.yaw.selection, classifies nearest baseline
+    │     within baselines.yaw.classificationThreshold; nil otherwise)
     │  exponential smoothing (0.8*prev + 0.2*new)
     ▼  Task { @MainActor } publishes DetectedPose (keypoints + faceLandmarks + score)
 ContentView
@@ -180,5 +187,7 @@ ContentView
 - **Tone pitch-shifting with `AVAudioPlayer.rate`** changes duration too — not used; we synthesize each pitch separately.
 - **Idle timer**: `UIApplication.shared.isIdleTimerDisabled = true` when the scene is active, `false` when backgrounded, so the screen doesn't sleep during use.
 - **`VNFaceObservation.yaw` is quantized to 45° even at revision 3+ in practice.** Despite Apple's docs. For continuous yaw on iOS 26, don't use the property — compute your own proxy from landmark geometry (`medianLine` offset within bbox is clean).
-- **Single-axis yaw isn't enough.** Side-profile ("center") and 3/4 view can collapse to nearly the same median-line offset because the midline is near the bbox edge in both. Need a second axis (frontality = ear-confidence ratio) to separate them.
+- **Single-axis yaw isn't enough** — but *which* axis fails depends on setup. In one camera angle "middle" and "left" collapse on direction (median-line offset) while "middle" and "right" stay separated; in another the opposite pair collapses on frontality. That's why classification uses an adaptive 2-feature pair selected from `YawTelemetry` at calibration time.
+- **Ear-confidence ratio is mostly dead as a frontality signal.** The body-pose model typically only detects one ear when the phone is propped at the user's side (all three calibration positions are still substantially in profile), so `min/max` of the two ear confidences is ~0 across all positions. Kept in `YawTelemetry` for diagnostics, but `FrontalityFeature` doesn't include it.
+- **`VNFaceObservation.boundingBox` aspect ratio is fixed** (observed ≈1.78 W/H in portrait, identical across all head positions). Vision sizes the bbox consistently regardless of how frontal the face is. Not a usable frontality proxy — don't try.
 - **Face landmarks are in bounding-box-local coords**, not image-normalized. `VNFaceLandmarkRegion2D.normalizedPoints` ranges 0-1 within the face rect — you have to transform by `bbox.origin + p * bbox.size` to get image-space coordinates that match what the body pose model returns. For a yaw signal that's bbox-invariant, you can use normalized points directly without converting.

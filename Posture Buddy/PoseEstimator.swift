@@ -54,6 +54,15 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
         currentTelemetry.withLock { $0 }
     }
 
+    /// Discards any committed baselines so scoring pauses. Called at the start of a
+    /// fresh calibration so stale scores don't leak into timers / sounds while the
+    /// user is repositioning.
+    func resetCalibration() {
+        baselines.withLock { $0 = nil }
+        emaState.withLock { $0 = 100 }
+        isCalibrated = false
+    }
+
     /// Commits the three-position baselines. Returns false if the adaptive yaw-feature
     /// selector couldn't find a pair that separates the three positions (e.g. face
     /// landmarks too sparse in one of the snapshots) — caller should surface the
