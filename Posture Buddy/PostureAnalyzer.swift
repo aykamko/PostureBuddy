@@ -3,8 +3,10 @@ import Vision
 // Pure-math analyzer; runs on the video queue alongside Vision requests.
 nonisolated struct PostureAnalyzer {
     private static let confidenceThreshold: Float = 0.3
-    // How far (in degrees) from the baseline before the score hits zero.
-    private static let maxDeviation: Float = 15.0
+    // How far (in degrees) from the baseline before the score hits zero. Larger values
+    // make scoring less sensitive — a 3° drift at 15° maxDev is already a "fair" grade,
+    // which felt too aggressive in practice for normal small head movements.
+    private static let maxDeviation: Float = 20.0
 
     func computeAngles(
         _ observation: VNHumanBodyPoseObservation,
