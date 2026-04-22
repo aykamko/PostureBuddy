@@ -7,8 +7,8 @@ import Combine
 ///
 /// Sustained-state timers in both directions mean brief grade flutters don't trigger sounds.
 /// The recovery sound only fires if the slouch sound played first (hysteresis).
-private let slouchDelay: TimeInterval = 5.0
-private let recoveryDelay: TimeInterval = 5.0
+private let slouchDelay: TimeInterval = 6.0
+private let recoveryDelay: TimeInterval = 3.0
 
 @MainActor
 final class PostureSoundCoach: ObservableObject {

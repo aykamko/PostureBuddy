@@ -48,7 +48,12 @@ struct ContentView: View {
             }
             .onChange(of: poseEstimator.currentPose?.score?.value) {
                 guard poseEstimator.isCalibrated else { return }
-                let score = poseEstimator.currentPose?.score
+                // Drop nil scores: the classifier regularly pauses for single frames
+                // (face landmarks flicker, yaw crosses the threshold). Forwarding those
+                // nils would reset in-flight slouch/recovery timers on every blip,
+                // preventing them from ever firing. Long-horizon resets happen
+                // explicitly via pauseCapture + calibration.start.
+                guard let score = poseEstimator.currentPose?.score else { return }
                 notificationManager.update(score: score)
                 soundCoach.update(score: score)
             }

@@ -316,3 +316,56 @@ struct PostureBaselines {
 enum CalibrationPosition: String {
     case middle, left, right
 }
+
+// MARK: - Median helpers
+
+/// Componentwise median across a burst of per-frame snapshots. Single-frame calibration
+/// captures were getting skewed by detector jitter (e.g. `contourSpreadOverH` spiking
+/// high for one frame); taking the median of 6–10 snapshots gives a baseline that's
+/// actually representative of the user's steady-state position.
+extension PostureAngles {
+    static func median(of samples: [PostureAngles]) -> PostureAngles? {
+        guard !samples.isEmpty else { return nil }
+        let ear = Self.median(samples.map { $0.earShoulderAngle })!
+        // Keep the hip only if the majority of samples had a visible hip — otherwise
+        // it's not reliable enough to score against.
+        let hips = samples.compactMap { $0.shoulderHipAngle }
+        let hip = hips.count * 2 >= samples.count ? Self.median(hips) : nil
+        let telemetries = samples.compactMap { $0.yawTelemetry }
+        return PostureAngles(
+            earShoulderAngle: ear,
+            shoulderHipAngle: hip,
+            yawTelemetry: telemetries.isEmpty ? nil : YawTelemetry.median(of: telemetries)
+        )
+    }
+
+    fileprivate static func median(_ values: [Float]) -> Float? {
+        guard !values.isEmpty else { return nil }
+        let s = values.sorted()
+        let n = s.count
+        return n % 2 == 1 ? s[n / 2] : (s[n / 2 - 1] + s[n / 2]) / 2
+    }
+}
+
+extension YawTelemetry {
+    static func median(of samples: [YawTelemetry]) -> YawTelemetry {
+        func medOpt(_ key: KeyPath<YawTelemetry, Float?>) -> Float? {
+            PostureAngles.median(samples.compactMap { $0[keyPath: key] })
+        }
+        func med(_ key: KeyPath<YawTelemetry, Float>) -> Float {
+            PostureAngles.median(samples.map { $0[keyPath: key] }) ?? 0
+        }
+        return YawTelemetry(
+            medianX: medOpt(\.medianX),
+            noseCrestX: medOpt(\.noseCrestX),
+            noseCentroidX: medOpt(\.noseCentroidX),
+            bboxAspectWH: med(\.bboxAspectWH),
+            contourSpreadLocal: medOpt(\.contourSpreadLocal),
+            contourSpreadOverH: medOpt(\.contourSpreadOverH),
+            eyeSepLocal: medOpt(\.eyeSepLocal),
+            eyeSepOverH: medOpt(\.eyeSepOverH),
+            allLandmarksSpreadLocal: medOpt(\.allLandmarksSpreadLocal),
+            earConfRatio: med(\.earConfRatio)
+        )
+    }
+}

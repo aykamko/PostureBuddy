@@ -22,6 +22,12 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
     nonisolated private let analyzer = PostureAnalyzer()
     private let lastProcessedTime = OSAllocatedUnfairLock(initialState: CFTimeInterval(0))
     private let emaState = OSAllocatedUnfairLock(initialState: Float(100))
+    // EMA-smoothed yaw signature. Single-frame detector jitter on direction / frontality
+    // can push a frame back and forth across the classification threshold when the user
+    // sits between two baselines; smoothing before classify() keeps it stable.
+    // α = 0.3 (new weight); reaches ~80% of a step change in ~4-5 frames (~450 ms at 10 Hz).
+    nonisolated static let yawSignatureSmoothingAlpha: Float = 0.3
+    private let smoothedYawSignature = OSAllocatedUnfairLock<YawSignature?>(initialState: nil)
     private let visionOrientation = OSAllocatedUnfairLock(initialState: CGImagePropertyOrientation.leftMirrored)
     private let lastLogTime = OSAllocatedUnfairLock(initialState: CFTimeInterval(0))
     private let lastLogState = OSAllocatedUnfairLock<FrameLogState>(initialState: .noValidSide)
@@ -70,6 +76,7 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
     func resetCalibration() {
         baselines.withLock { $0 = nil }
         emaState.withLock { $0 = 100 }
+        smoothedYawSignature.withLock { $0 = nil }
         isCalibrated = false
     }
 
@@ -125,10 +132,27 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
         currentTelemetry.withLock { $0 = telemetry }
 
         let currentBaselines = baselines.withLock { $0 }
-        let scored = scoreFrame(angles: angles, baselines: currentBaselines)
 
-        // Reproject the current frame through the calibrated selection for logging.
-        let runtimeSig = telemetry.flatMap { currentBaselines?.yaw.selection.signature(from: $0) }
+        // Project the current frame via the calibrated selection, then EMA-smooth so
+        // per-frame detector jitter doesn't push us across the classification threshold
+        // when the user is between baselines.
+        let rawSig = telemetry.flatMap { currentBaselines?.yaw.selection.signature(from: $0) }
+        let runtimeSig = smoothedYawSignature.withLock { prev -> YawSignature? in
+            guard let rawSig else { return prev }
+            let α = Self.yawSignatureSmoothingAlpha
+            let next: YawSignature
+            if let prev {
+                next = YawSignature(
+                    direction: (1 - α) * prev.direction + α * rawSig.direction,
+                    frontality: (1 - α) * prev.frontality + α * rawSig.frontality
+                )
+            } else {
+                next = rawSig
+            }
+            prev = next
+            return next
+        }
+        let scored = scoreFrame(angles: angles, baselines: currentBaselines, yawSignature: runtimeSig)
         let classification = runtimeSig.flatMap { sig in currentBaselines.map { $0.yaw.classify(sig) } }
 
         let state: FrameLogState
@@ -194,11 +218,13 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
     /// or when the analyzer can't classify the head position.
     nonisolated private func scoreFrame(
         angles: PostureAngles?,
-        baselines: PostureBaselines?
+        baselines: PostureBaselines?,
+        yawSignature sig: YawSignature?
     ) -> (score: PostureScore, position: CalibrationPosition)? {
         guard let angles,
               let baselines,
-              let raw = analyzer.score(current: angles, baselines: baselines)
+              let sig,
+              let raw = analyzer.score(current: angles, baselines: baselines, yawSignature: sig)
         else { return nil }
         let smoothed = emaState.withLock { current in
             current = 0.8 * current + 0.2 * raw.score.value

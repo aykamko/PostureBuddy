@@ -18,9 +18,15 @@ final class CalibrationController: ObservableObject {
     // Pacing. File-scope constants would also work, but keeping them here keeps the
     // flow's tunables colocated with the code that uses them.
     private static let postVoicePause: Duration = .milliseconds(300)
-    private static let captureHoldAfterBeat: Duration = .milliseconds(500)
     private static let postCaptureMarimbaPause: Duration = .milliseconds(400)
     private static let countdownBeatInterval: Duration = .seconds(1)
+
+    // Burst-sample the pose estimator during the hold-after-beat window and take the
+    // median. Single-frame capture was catching detector spikes; a longer burst gives
+    // a baseline that matches the user's steady state.
+    private static let burstSampleInterval: Duration = .milliseconds(125)
+    private static let burstSampleCount: Int = 16
+    private static let burstMinSuccessfulSamples: Int = 10
 
     private static let steps: [(instruction: String, voice: VoicePrompt)] = [
         ("Look at the middle of your screen", .lookMiddle),
@@ -114,18 +120,33 @@ final class CalibrationController: ObservableObject {
         UINotificationFeedbackGenerator().notificationOccurred(.success)
         SoundEffects.playCapture()
 
-        guard let angles = poseEstimator.snapshotCurrentAngles() else {
+        // Burst-sample the pose estimator for ~1s so the baseline is a median across
+        // several frames, not one jittery snapshot.
+        var samples: [PostureAngles] = []
+        for _ in 0..<Self.burstSampleCount {
+            try await Task.sleep(for: Self.burstSampleInterval)
+            try Task.checkCancellation()
+            if let a = poseEstimator.snapshotCurrentAngles() { samples.append(a) }
+        }
+
+        guard
+            samples.count >= Self.burstMinSuccessfulSamples,
+            let merged = PostureAngles.median(of: samples)
+        else {
             await VoiceGuide.shared.say(.poseNotDetected)
             cleanup()
             return nil
         }
-        let telemetry = poseEstimator.snapshotCurrentTelemetry()?.debugString ?? "n/a"
-        Log.line("[YawTelemetry]", "\(step.voice.rawValue): \(telemetry)")
 
-        try await Task.sleep(for: Self.captureHoldAfterBeat)
+        let telemetry = merged.yawTelemetry?.debugString ?? "n/a"
+        Log.line(
+            "[YawTelemetry]",
+            "\(step.voice.rawValue) (median of \(samples.count)): \(telemetry)"
+        )
+
         countdown = nil
         try await Task.sleep(for: Self.postCaptureMarimbaPause)
-        return angles
+        return merged
     }
 
     /// Sets the countdown number, plays the matching marimba tick + light haptic, then
