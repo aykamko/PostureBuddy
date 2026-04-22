@@ -35,10 +35,8 @@ final class WatchPostureReceiver: NSObject, ObservableObject, WCSessionDelegate 
         Task { @MainActor in
             lastEvent = event
             switch event {
-            case "slouchAlert":
+            case "slouch":
                 WKInterfaceDevice.current().play(.notification)
-            case "slouchCoach":
-                WKInterfaceDevice.current().play(.directionUp)
             case "recovery":
                 WKInterfaceDevice.current().play(.success)
             default:

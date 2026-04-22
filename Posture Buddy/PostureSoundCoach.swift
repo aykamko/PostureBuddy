@@ -69,7 +69,7 @@ final class PostureSoundCoach: ObservableObject {
                 self?.isAlerted = true
                 Log.line("[Coach]", "🔊 playing slouch sound")
                 SoundEffects.playSlouch()
-                WatchBridge.shared.notify(.slouchCoach)
+                WatchBridge.shared.notify(.slouch)
             }
         }
     }

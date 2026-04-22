@@ -15,9 +15,8 @@ final class WatchBridge: NSObject, ObservableObject, WCSessionDelegate {
     static let shared = WatchBridge()
 
     enum Event: String {
-        case slouchAlert   // 10s/30s threshold crossed — firm haptic
-        case slouchCoach   // PostureSoundCoach slouch sound fired — lighter
-        case recovery      // PostureSoundCoach recovery sound fired — upbeat
+        case slouch    // PostureSoundCoach slouch sound fired — fair/poor sustained
+        case recovery  // PostureSoundCoach recovery sound fired — good sustained after an alert
     }
 
     private let session: WCSession?

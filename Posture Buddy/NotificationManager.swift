@@ -65,7 +65,8 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
     private func triggerAlert() {
         haptic.prepare()
         haptic.impactOccurred()
-        WatchBridge.shared.notify(.slouchAlert)
+        // No watch haptic here — the coach already fired `.slouch` at 6s; another
+        // haptic 4s later for the same slouch condition is just noise on the wrist.
 
         let content = UNMutableNotificationContent()
         content.title = "Posture Check"
