@@ -5,15 +5,10 @@ nonisolated struct PostureAnalyzer {
     private static let confidenceThreshold: Float = 0.3
     // How far (in degrees) from the baseline before the score hits zero.
     private static let maxDeviation: Float = 15.0
-    // Max 2D Euclidean distance between current yawSignature and the nearest baseline
-    // before we treat the head as "unknown position" and pause scoring. Units combine
-    // direction (bbox-width fractions, ~[-0.5, 0.5]) and frontality ([0, 1]). 0.2 is
-    // a starting value — tune as baselines land in real data.
-    private static let yawClassificationThreshold: Float = 0.2
 
     func computeAngles(
         _ observation: VNHumanBodyPoseObservation,
-        yawSignature: YawSignature?
+        yawTelemetry: YawTelemetry?
     ) -> PostureAngles? {
         guard let allPoints = try? observation.recognizedPoints(.all),
               let side = pickBestSide(allPoints)
@@ -25,36 +20,33 @@ nonisolated struct PostureAnalyzer {
         return PostureAngles(
             earShoulderAngle: earShoulder,
             shoulderHipAngle: shoulderHip,
-            yawSignature: yawSignature
+            yawTelemetry: yawTelemetry
         )
     }
 
-    /// Matches the current frame to one of three calibrated baselines (middle / left / right)
-    /// using yawSignature, then scores against that baseline. Returns nil when:
-    ///   • current frame has no yawSignature (nose not detected), or
-    ///   • current yaw is too far from all three baselines (head in an uncalibrated pose)
+    /// Projects the current frame's telemetry into the calibrated feature pair, picks
+    /// the nearest baseline within the classification threshold, and scores against it.
+    /// Returns nil when:
+    ///   • current frame has no yaw telemetry (face not detected), or
+    ///   • the frame's telemetry lacks the selected features (partial landmarks), or
+    ///   • the frame is too far from all three baselines (head in an uncalibrated pose).
     /// Callers treat nil as "pause scoring".
     func score(
         current: PostureAngles,
         baselines: PostureBaselines
     ) -> (score: PostureScore, position: CalibrationPosition)? {
-        guard let currentYaw = current.yawSignature else { return nil }
-
-        let sources: [(baseline: PostureAngles, position: CalibrationPosition)] = [
-            (baselines.middle, .middle),
-            (baselines.left, .left),
-            (baselines.right, .right),
-        ]
-        let candidates = sources.compactMap { c -> (baseline: PostureAngles, position: CalibrationPosition, dist: Float)? in
-            guard let baseYaw = c.baseline.yawSignature else { return nil }
-            return (c.baseline, c.position, currentYaw.distance(to: baseYaw))
-        }
-
-        guard let best = candidates.min(by: { $0.dist < $1.dist }),
-              best.dist <= Self.yawClassificationThreshold
+        guard
+            let telemetry = current.yawTelemetry,
+            let sig = baselines.yaw.selection.signature(from: telemetry),
+            let position = baselines.yaw.classify(sig)
         else { return nil }
-        let matched = best.baseline
-        let position = best.position
+
+        let matched: PostureAngles
+        switch position {
+        case .middle: matched = baselines.middle
+        case .left: matched = baselines.left
+        case .right: matched = baselines.right
+        }
 
         let earDev = abs(current.earShoulderAngle - matched.earShoulderAngle)
         let earScore = max(0, 1.0 - earDev / Self.maxDeviation)

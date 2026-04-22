@@ -7,7 +7,7 @@ iOS app that monitors sitting posture in real time using the front camera. The u
 ### Pose estimation: 2D only
 - Uses **`VNDetectHumanBodyPoseRequest`** (2D), not 3D.
 - The **3D variant (`VNDetectHumanBodyPose3DRequest` / `DetectHumanBodyPose3DRequest`) is broken on iOS 26** — fails with `Error Domain=com.apple.Vision Code=9 "Unable to run HumanBodyPose3D pipeline"` and `Could not create mlImage buffer of type kCVPixelFormatType_32BGRA`. Both the `VN`-prefixed and Swift-native API fail. Do not reintroduce it without testing on a current iOS version.
-  - This is likely broken because the camera will typically not capture all of the user's joints when propped up on the desk, since the desk occludes the bottom half of the body. In other workds, we usually only see the top half of the body.
+  - This is likely broken because the camera will typically not capture all of the user's joints when propped up on the desk, since the desk occludes the bottom half of the body. In other words, we usually only see the top half of the body.
 
 ### Scoring: 3-position calibration + head-yaw-aware classification
 - 2D pose can't separate "bad posture" from "weird camera angle" or "head turned". Rotating your head ~30° toward the screen shifts the ear's 2D position enough to tank the score even with perfect torso posture.

@@ -68,7 +68,16 @@ final class CalibrationController: ObservableObject {
             snapshots.append(angles)
         }
 
-        poseEstimator.calibrate(middle: snapshots[0], left: snapshots[1], right: snapshots[2])
+        let committed = poseEstimator.calibrate(
+            middle: snapshots[0],
+            left: snapshots[1],
+            right: snapshots[2]
+        )
+        guard committed else {
+            await VoiceGuide.shared.say(.poseNotDetected)
+            cleanup()
+            return
+        }
         soundCoach.reset()
 
         instruction = "Calibration complete"
@@ -101,6 +110,8 @@ final class CalibrationController: ObservableObject {
             cleanup()
             return nil
         }
+        let telemetry = poseEstimator.snapshotCurrentTelemetry()?.debugString ?? "n/a"
+        print("[YawTelemetry] \(step.voice.rawValue): \(telemetry)")
 
         try await Task.sleep(for: Self.captureHoldAfterBeat)
         countdown = nil

@@ -54,28 +54,25 @@ struct PostureScore {
 
 // MARK: - Angles and baselines
 
-// A snapshot of the side-profile angles + head-yaw signature for one frame.
+// A snapshot of the side-profile angles + raw yaw telemetry for one frame.
 // Baseline = same struct captured during calibration at one head position.
 struct PostureAngles {
     let earShoulderAngle: Float       // degrees from image-vertical
     let shoulderHipAngle: Float?      // nil if hip was occluded
-    // 2D head-position signature used at runtime to pick which calibrated baseline
-    // to score against. Nil if face wasn't detected.
-    let yawSignature: YawSignature?
+    // Raw candidate features for yaw classification. Nil if face wasn't detected.
+    // The analyzer projects this into a `YawSignature` at scoring time using the
+    // feature pair chosen during calibration (see YawCalibration).
+    let yawTelemetry: YawTelemetry?
 }
 
-// 2D head-position signature. `direction` captures left/right rotation (from the
-// face median-line position within the bbox). `frontality` captures how much of the
-// face is visible to the camera (from body-pose ear-confidence symmetry). Together
-// they separate head positions that would collapse in a single-axis yaw measure.
-// Built on the video-processing thread; never needs the main actor.
+// A 2D point in the feature space chosen by calibration. Comparable across frames
+// because both sides of any comparison use the same YawSelection extractor.
 nonisolated struct YawSignature {
-    let direction: Float   // ~[-0.5, +0.5], 0 = face midline at bbox center
-    let frontality: Float  // [0, 1], 0 = deep profile (one ear), 1 = frontal (both ears equally visible)
+    let direction: Float
+    let frontality: Float
 
-    /// Compact debug representation, e.g. `dir=+0.123 front=0.45`.
     var debugString: String {
-        String(format: "dir=%+.3f front=%.2f", direction, frontality)
+        String(format: "dir=%+.3f front=%.3f", direction, frontality)
     }
 
     func distance(to other: YawSignature) -> Float {
@@ -83,49 +80,208 @@ nonisolated struct YawSignature {
         let df = frontality - other.frontality
         return sqrtf(dd * dd + df * df)
     }
+}
 
-    /// Builds a signature from a face observation (for `direction`) and a body-pose
-    /// observation (for `frontality`). Returns nil if the face detector didn't give
-    /// us enough landmarks to estimate direction.
+// Debug-only bundle of candidate yaw features computed per frame. We don't use these
+// for classification yet — the goal is to log them across middle/left/right during
+// calibration and see which pair of axes actually separates the three positions in
+// practice. Once we pick a pair, we can replace `YawSignature` and drop this struct.
+nonisolated struct YawTelemetry {
+    let medianX: Float?                // current direction signal (medianLine x-offset, bbox-local)
+    let noseCrestX: Float?             // alt direction: nose-bridge centerline centroid offset
+    let noseCentroidX: Float?          // alt direction: full `nose` region centroid offset
+    let bboxAspectWH: Float            // face bbox width / height (profile → narrow, frontal → wide)
+    let contourSpreadLocal: Float?     // faceContour x-spread, bbox-local (0-1)
+    let contourSpreadOverH: Float?     // same, normalized by bbox height (yaw-invariant)
+    let eyeSepLocal: Float?            // leftEye↔rightEye centroid distance, bbox-local
+    let eyeSepOverH: Float?            // same, normalized by bbox height
+    let allLandmarksSpreadLocal: Float?  // x-spread across all landmarks, bbox-local
+    let earConfRatio: Float            // current frontality signal
+
+    var debugString: String {
+        func f3(_ v: Float?) -> String { v.map { String(format: "%+.3f", $0) } ?? "n/a" }
+        func f2(_ v: Float?) -> String { v.map { String(format: "%.2f", $0) } ?? "n/a" }
+        return """
+        med=\(f3(medianX)) crest=\(f3(noseCrestX)) nose=\(f3(noseCentroidX)) \
+        aspect=\(f2(bboxAspectWH)) \
+        contourW=\(f2(contourSpreadLocal)) contourW/H=\(f2(contourSpreadOverH)) \
+        eyeSep=\(f2(eyeSepLocal)) eyeSep/H=\(f2(eyeSepOverH)) \
+        allSpread=\(f2(allLandmarksSpreadLocal)) earRatio=\(f2(earConfRatio))
+        """
+    }
+
     static func from(
         face: VNFaceObservation?,
         body: VNHumanBodyPoseObservation
-    ) -> YawSignature? {
-        guard let face, let direction = directionComponent(from: face) else { return nil }
-        return YawSignature(direction: direction, frontality: frontalityComponent(from: body))
+    ) -> YawTelemetry? {
+        guard let face else { return nil }
+        let bbox = face.boundingBox
+        let aspectWH = bbox.height > 0 ? Float(bbox.width / bbox.height) : 0
+        let wOverH: Float = bbox.height > 0 ? Float(bbox.width / bbox.height) : 0
+
+        let landmarks = face.landmarks
+        let medianX = centroidX(of: landmarks?.medianLine).map { $0 - 0.5 }
+        let noseCrestX = centroidX(of: landmarks?.noseCrest).map { $0 - 0.5 }
+        let noseCentroidX = centroidX(of: landmarks?.nose).map { $0 - 0.5 }
+
+        let contourLocal = xSpread(of: landmarks?.faceContour)
+        let contourOverH = contourLocal.map { $0 * wOverH }
+
+        let leftEyeX = centroidX(of: landmarks?.leftEye)
+        let rightEyeX = centroidX(of: landmarks?.rightEye)
+        let eyeLocal: Float? = {
+            guard let l = leftEyeX, let r = rightEyeX else { return nil }
+            return abs(r - l)
+        }()
+        let eyeOverH = eyeLocal.map { $0 * wOverH }
+
+        let allSpreadLocal = xSpread(of: landmarks?.allPoints)
+
+        let leftEar = (try? body.recognizedPoint(.leftEar))?.confidence ?? 0
+        let rightEar = (try? body.recognizedPoint(.rightEar))?.confidence ?? 0
+        let maxEar = max(leftEar, rightEar)
+        let earRatio = maxEar > 0 ? min(leftEar, rightEar) / maxEar : 0
+
+        return YawTelemetry(
+            medianX: medianX,
+            noseCrestX: noseCrestX,
+            noseCentroidX: noseCentroidX,
+            bboxAspectWH: aspectWH,
+            contourSpreadLocal: contourLocal,
+            contourSpreadOverH: contourOverH,
+            eyeSepLocal: eyeLocal,
+            eyeSepOverH: eyeOverH,
+            allLandmarksSpreadLocal: allSpreadLocal,
+            earConfRatio: earRatio
+        )
     }
 
-    /// Face median-line horizontal offset within the bbox. Roughly [-0.5, +0.5].
-    /// Captures left/right head rotation.
-    private static func directionComponent(from observation: VNFaceObservation) -> Float? {
-        // Prefer medianLine (full face centerline, more robust average); fall back to
-        // noseCrest (nose bridge, still a good yaw signal).
-        let region = observation.landmarks?.medianLine ?? observation.landmarks?.noseCrest
-        guard let points = region?.normalizedPoints, !points.isEmpty else { return nil }
-        let avgX = points.reduce(Float(0)) { $0 + Float($1.x) } / Float(points.count)
-        return avgX - 0.5
+    private static func centroidX(of region: VNFaceLandmarkRegion2D?) -> Float? {
+        guard let pts = region?.normalizedPoints, !pts.isEmpty else { return nil }
+        return pts.reduce(Float(0)) { $0 + Float($1.x) } / Float(pts.count)
     }
 
-    /// Ratio of ear confidences from the body pose model. [0, 1]. Near 0 = deep side
-    /// profile (one ear visible); closer to 1 = head turned toward camera (both ears
-    /// visible). Separates "clean side profile" from "3/4 view" when the median line
-    /// offset barely moves between them.
-    private static func frontalityComponent(from observation: VNHumanBodyPoseObservation) -> Float {
-        let leftConf = (try? observation.recognizedPoint(.leftEar))?.confidence ?? 0
-        let rightConf = (try? observation.recognizedPoint(.rightEar))?.confidence ?? 0
-        let maxConf = max(leftConf, rightConf)
-        guard maxConf > 0 else { return 0 }
-        return min(leftConf, rightConf) / maxConf
+    private static func xSpread(of region: VNFaceLandmarkRegion2D?) -> Float? {
+        guard let pts = region?.normalizedPoints, !pts.isEmpty else { return nil }
+        let xs = pts.map { Float($0.x) }
+        guard let lo = xs.min(), let hi = xs.max() else { return nil }
+        return hi - lo
     }
 }
 
-// Three calibrated baselines corresponding to the user looking at the middle,
-// left, and right of their screen. At runtime the current frame's yawSignature
-// is matched to the closest baseline.
+// MARK: - Adaptive yaw feature selection
+
+/// One of several candidate signals for left/right head rotation. The right one depends
+/// on camera angle / user anatomy — we pick the best via calibration.
+enum DirectionFeature: String, CaseIterable {
+    case medianLine
+    case noseCrest
+    case noseCentroid
+
+    func extract(_ t: YawTelemetry) -> Float? {
+        switch self {
+        case .medianLine: return t.medianX
+        case .noseCrest: return t.noseCrestX
+        case .noseCentroid: return t.noseCentroidX
+        }
+    }
+}
+
+/// Candidate signals for how frontal the face is (distinguishing "deep profile" from
+/// "3/4 view toward camera"). Picked adaptively at calibration.
+enum FrontalityFeature: String, CaseIterable {
+    case eyeSeparationOverHeight
+    case contourSpreadOverHeight
+    case allLandmarksSpread
+
+    func extract(_ t: YawTelemetry) -> Float? {
+        switch self {
+        case .eyeSeparationOverHeight: return t.eyeSepOverH
+        case .contourSpreadOverHeight: return t.contourSpreadOverH
+        case .allLandmarksSpread: return t.allLandmarksSpreadLocal
+        }
+    }
+}
+
+/// The chosen pair of features. Projects a raw YawTelemetry into a 2D YawSignature.
+struct YawSelection {
+    let direction: DirectionFeature
+    let frontality: FrontalityFeature
+
+    func signature(from t: YawTelemetry) -> YawSignature? {
+        guard let d = direction.extract(t), let f = frontality.extract(t) else { return nil }
+        return YawSignature(direction: d, frontality: f)
+    }
+}
+
+/// Everything yaw-related produced by a successful calibration: which features to use,
+/// the three baseline signatures, and a data-derived classification threshold. The
+/// threshold is half the minimum pairwise distance among the three baselines, so each
+/// baseline gets a Voronoi-ish acceptance radius that never overlaps its neighbors.
+struct YawCalibration {
+    let selection: YawSelection
+    let middle: YawSignature
+    let left: YawSignature
+    let right: YawSignature
+    let classificationThreshold: Float
+    let minPairwiseDistance: Float   // kept for logging / diagnostics
+
+    /// Picks the (direction, frontality) pair whose three baseline points have the
+    /// largest minimum pairwise distance — i.e. the pair that most reliably tells the
+    /// three positions apart for this particular user + camera setup.
+    static func make(
+        middle mT: YawTelemetry,
+        left lT: YawTelemetry,
+        right rT: YawTelemetry
+    ) -> YawCalibration? {
+        var best: YawCalibration?
+        for dir in DirectionFeature.allCases {
+            for front in FrontalityFeature.allCases {
+                let sel = YawSelection(direction: dir, frontality: front)
+                guard
+                    let m = sel.signature(from: mT),
+                    let l = sel.signature(from: lT),
+                    let r = sel.signature(from: rT)
+                else { continue }
+                let dML = m.distance(to: l)
+                let dLR = l.distance(to: r)
+                let dMR = m.distance(to: r)
+                let minDist = min(dML, dLR, dMR)
+                // Require non-trivial separation — otherwise this pair is useless.
+                guard minDist > 0.01 else { continue }
+                let candidate = YawCalibration(
+                    selection: sel,
+                    middle: m,
+                    left: l,
+                    right: r,
+                    classificationThreshold: minDist * 0.5,
+                    minPairwiseDistance: minDist
+                )
+                if best == nil || minDist > best!.minPairwiseDistance {
+                    best = candidate
+                }
+            }
+        }
+        return best
+    }
+
+    /// Returns the nearest baseline within `classificationThreshold`, or nil if the
+    /// frame is too far from all three (caller pauses scoring).
+    func classify(_ sig: YawSignature) -> CalibrationPosition? {
+        let options: [(CalibrationPosition, YawSignature)] = [
+            (.middle, middle), (.left, left), (.right, right)
+        ]
+        let best = options.min { sig.distance(to: $0.1) < sig.distance(to: $1.1) }!
+        return sig.distance(to: best.1) <= classificationThreshold ? best.0 : nil
+    }
+}
+
+// Three calibrated baselines + the adaptive yaw calibration derived from them.
 struct PostureBaselines {
     let middle: PostureAngles
     let left: PostureAngles
     let right: PostureAngles
+    let yaw: YawCalibration
 }
 
 enum CalibrationPosition: String {

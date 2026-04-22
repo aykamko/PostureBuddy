@@ -27,6 +27,9 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
 
     // Most-recent per-frame angles (for calibration capture)
     private let currentAngles = OSAllocatedUnfairLock<PostureAngles?>(initialState: nil)
+    // Most-recent per-frame telemetry (debug-only; logged during calibration to evaluate
+    // candidate yaw features)
+    private let currentTelemetry = OSAllocatedUnfairLock<YawTelemetry?>(initialState: nil)
     // Calibrated references (middle / left / right); nil until user completes calibration
     private let baselines = OSAllocatedUnfairLock<PostureBaselines?>(initialState: nil)
 
@@ -36,18 +39,50 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
 
     /// Returns the most-recent frame's computed angles, or nil if the current frame
     /// didn't yield a valid pose. Used by the calibration flow to snapshot per-position.
+    /// Requires yaw telemetry to be present — a calibration snapshot without a detected
+    /// face would be useless downstream.
     func snapshotCurrentAngles() -> PostureAngles? {
-        currentAngles.withLock { $0 }
+        currentAngles.withLock { a in
+            guard let a, a.yawTelemetry != nil else { return nil }
+            return a
+        }
     }
 
-    /// Commits the three-position baselines (after guided calibration completes).
-    func calibrate(middle: PostureAngles, left: PostureAngles, right: PostureAngles) {
-        let b = PostureBaselines(middle: middle, left: left, right: right)
+    /// Returns the most-recent frame's yaw telemetry (debug). Logged by the calibration
+    /// flow at each position to compare candidate features.
+    func snapshotCurrentTelemetry() -> YawTelemetry? {
+        currentTelemetry.withLock { $0 }
+    }
+
+    /// Commits the three-position baselines. Returns false if the adaptive yaw-feature
+    /// selector couldn't find a pair that separates the three positions (e.g. face
+    /// landmarks too sparse in one of the snapshots) — caller should surface the
+    /// "try again" voice prompt in that case.
+    func calibrate(middle: PostureAngles, left: PostureAngles, right: PostureAngles) -> Bool {
+        guard
+            let mT = middle.yawTelemetry,
+            let lT = left.yawTelemetry,
+            let rT = right.yawTelemetry,
+            let yawCal = YawCalibration.make(middle: mT, left: lT, right: rT)
+        else {
+            return false
+        }
+        let b = PostureBaselines(middle: middle, left: left, right: right, yaw: yawCal)
         baselines.withLock { $0 = b }
         emaState.withLock { $0 = 100 }
         isCalibrated = true
-        func yaw(_ a: PostureAngles) -> String { a.yawSignature?.debugString ?? "nil" }
-        print("[Posture] calibrated 3 positions  middle=\(yaw(middle))  left=\(yaw(left))  right=\(yaw(right))")
+        print(
+            "[Posture] calibrated  selection=(\(yawCal.selection.direction.rawValue), "
+            + "\(yawCal.selection.frontality.rawValue))  "
+            + "threshold=\(String(format: "%.3f", yawCal.classificationThreshold))  "
+            + "minPair=\(String(format: "%.3f", yawCal.minPairwiseDistance))"
+        )
+        print(
+            "  middle=\(yawCal.middle.debugString)  "
+            + "left=\(yawCal.left.debugString)  "
+            + "right=\(yawCal.right.debugString)"
+        )
+        return true
     }
 
     nonisolated func captureOutput(
@@ -59,18 +94,21 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
         guard lastProcessedTime.shouldFire(now: now, minInterval: 0.1) else { return }
         guard let (body, face) = runVisionRequests(on: sampleBuffer) else { return }
 
-        // Vision's `VNFaceObservation.yaw` is quantized to 45° even at revision 3+,
-        // so we derive a 2D signature (direction + frontality) ourselves.
-        let yawSignature = YawSignature.from(face: face, body: body)
-        let angles = analyzer.computeAngles(body, yawSignature: yawSignature)
+        // Per-frame yaw telemetry: raw candidate features for the adaptive selector.
+        // Which two we actually use for classification is decided at calibration time
+        // and lives in `baselines.yaw.selection`.
+        let telemetry = YawTelemetry.from(face: face, body: body)
+        let angles = analyzer.computeAngles(body, yawTelemetry: telemetry)
         currentAngles.withLock { $0 = angles }
+        currentTelemetry.withLock { $0 = telemetry }
 
         let currentBaselines = baselines.withLock { $0 }
         let scored = scoreFrame(angles: angles, baselines: currentBaselines)
+        let runtimeSig = telemetry.flatMap { currentBaselines?.yaw.selection.signature(from: $0) }
 
         if lastLogTime.shouldFire(now: now, minInterval: 2.0) {
             logFrame(
-                yaw: yawSignature,
+                yaw: runtimeSig,
                 score: scored?.score,
                 position: scored?.position,
                 hasAngles: angles != nil,
