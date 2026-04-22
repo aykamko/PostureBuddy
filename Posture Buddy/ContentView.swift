@@ -26,7 +26,17 @@ struct ContentView: View {
     @State private var trackingTimeoutTask: Task<Void, Never>?
     @State private var showTrackingFailedAlert = false
 
+    // Once calibration completes, fade the live preview to black over 1s and then
+    // drop the CameraPreviewView from the hierarchy so `AVCaptureVideoPreviewLayer`
+    // stops compositing frames — saves GPU power while the capture session keeps
+    // feeding PoseEstimator.
+    @State private var videoHidden: Bool = false
+    @State private var videoFadeOpacity: Double = 0
+    @State private var videoFadeTask: Task<Void, Never>?
+
     private let trackingTimeoutSeconds: Double = 45
+    private let videoFadeStartDelay: Duration = .seconds(3)
+    private let videoFadeDuration: Double = 1.0
 
     var body: some View {
         mainContent
@@ -34,6 +44,7 @@ struct ContentView: View {
             .animation(.easeInOut(duration: 0.2), value: calibration.countdown)
             .animation(.easeInOut(duration: 0.2), value: calibration.instruction)
             .animation(.easeInOut(duration: 0.2), value: showTrackingFailedAlert)
+            .animation(.easeInOut(duration: videoFadeDuration), value: videoFadeOpacity)
             .task {
                 poseEstimator.updateOrientation(UIDevice.current.orientation.visionOrientation)
                 await cameraManager.requestAccessAndSetup()
@@ -44,6 +55,24 @@ struct ContentView: View {
                 if ready {
                     trackingTimeoutTask?.cancel()
                     trackingTimeoutTask = nil
+                }
+            }
+            .onChange(of: poseEstimator.isCalibrated) { _, calibrated in
+                videoFadeTask?.cancel()
+                guard calibrated else {
+                    // Recalibration or reset — bring the preview back immediately
+                    // and fade the dimmer off.
+                    videoHidden = false
+                    videoFadeOpacity = 0
+                    return
+                }
+                videoFadeTask = Task { @MainActor in
+                    try? await Task.sleep(for: videoFadeStartDelay)
+                    if Task.isCancelled { return }
+                    videoFadeOpacity = 1.0
+                    try? await Task.sleep(for: .seconds(videoFadeDuration))
+                    if Task.isCancelled { return }
+                    videoHidden = true
                 }
             }
             .onChange(of: poseEstimator.currentPose?.score?.value) {
@@ -79,8 +108,18 @@ struct ContentView: View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            CameraPreviewView(session: cameraManager.session)
+            if !videoHidden {
+                CameraPreviewView(session: cameraManager.session)
+                    .ignoresSafeArea()
+            }
+
+            // Black dimmer between the camera preview and the skeleton. Animated via
+            // the body-level `.animation(value: videoFadeOpacity)` modifier, so we
+            // just set the target opacity from the fade Task.
+            Color.black
+                .opacity(videoFadeOpacity)
                 .ignoresSafeArea()
+                .allowsHitTesting(false)
 
             PostureOverlayView(detectedPose: poseEstimator.currentPose)
                 .ignoresSafeArea()

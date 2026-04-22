@@ -76,6 +76,11 @@ Workflow:
 3. Otherwise convert each mp3 to aiff: `ffmpeg -i in.mp3 -c:a pcm_s16be out.aiff`.
 4. Replace files in `Posture Buddy/VoicePrompts/`. Filenames must match `VoicePrompt.rawValue` exactly.
 
+### Battery: drop the video preview post-calibration
+- Once `poseEstimator.isCalibrated` becomes true, `ContentView` waits 3 s, fades a black overlay over the preview in ~1 s, then *removes* the `CameraPreviewView` from the view hierarchy. That deallocates the `AVCaptureVideoPreviewLayer`, which is the main GPU consumer — the capture session and `PoseEstimator` keep running unchanged, so pose detection and scoring are unaffected. The skeleton (`PostureOverlayView`) renders above the dimmer and stays visible throughout.
+- Reset path: when `isCalibrated` goes false (user taps Recalibrate), the preview is re-added to the hierarchy immediately and the dimmer fades off over 1 s so you can see yourself during the new calibration flow. Scene-phase changes (background/foreground) do **not** touch the fade state — returning from background on a calibrated session keeps the preview hidden.
+- The dimmer sits between the camera preview and the skeleton layer in the `ZStack`, so slouching feedback stays crisp on top of a plain black background.
+
 ### Orientation: portrait + portrait-upside-down
 - Supported orientations (Info.plist-equivalent in `project.pbxproj`): `UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown`.
 - **iOS's native portrait-upside-down rotation is unreliable on iPhone.** Setting the `AppDelegate` `supportedInterfaceOrientationsFor:` returning both doesn't actually rotate the UI.

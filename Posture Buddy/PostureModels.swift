@@ -45,8 +45,8 @@ struct PostureScore {
     nonisolated init(value: Float) {
         self.value = value
         switch value {
-        case 80...: grade = .good
-        case 60..<80: grade = .fair
+        case 75...: grade = .good
+        case 60..<75: grade = .fair
         default: grade = .poor
         }
     }
