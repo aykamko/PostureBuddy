@@ -80,11 +80,18 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
         isCalibrated = false
     }
 
-    /// Commits the three-position baselines. Returns false if the adaptive yaw-feature
-    /// selector couldn't find a pair that separates the three positions (e.g. face
-    /// landmarks too sparse in one of the snapshots) — caller should surface the
-    /// "try again" voice prompt in that case.
-    func calibrate(middle: PostureAngles, left: PostureAngles, right: PostureAngles) -> Bool {
+    /// Commits the baselines. Returns false if the adaptive yaw-feature selector
+    /// couldn't find a pair that separates the three yaw positions (e.g. face landmarks
+    /// too sparse in one of the snapshots) — caller should surface the "try again"
+    /// voice prompt in that case. `forwardLean` is captured at the middle yaw with the
+    /// user intentionally slouching; stored for future forward-sign derivation but not
+    /// yet wired into scoring.
+    func calibrate(
+        middle: PostureAngles,
+        forwardLean: PostureAngles,
+        left: PostureAngles,
+        right: PostureAngles
+    ) -> Bool {
         guard
             let mT = middle.yawTelemetry,
             let lT = left.yawTelemetry,
@@ -93,7 +100,24 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
         else {
             return false
         }
-        let b = PostureBaselines(middle: middle, left: left, right: right, yaw: yawCal)
+        // Forward-direction sign for asymmetric scoring: the sign of the ear-shoulder
+        // angle delta between leaning forward and sitting upright at the same yaw.
+        // Require a meaningful magnitude (≥1°) — small deltas mean the user didn't
+        // really lean, and trusting a noisy sign would silently penalize the wrong
+        // direction. nil → fall back to symmetric scoring.
+        let earForwardDelta = forwardLean.earShoulderAngle - middle.earShoulderAngle
+        let forwardSign: Float? = abs(earForwardDelta) >= 1.0
+            ? (earForwardDelta >= 0 ? 1.0 : -1.0)
+            : nil
+
+        let b = PostureBaselines(
+            middle: middle,
+            forwardLean: forwardLean,
+            left: left,
+            right: right,
+            yaw: yawCal,
+            forwardSign: forwardSign
+        )
         baselines.withLock { $0 = b }
         emaState.withLock { $0 = 100 }
         isCalibrated = true
@@ -110,6 +134,14 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
             "  middle=\(yawCal.middle.debugString)  "
             + "left=\(yawCal.left.debugString)  "
             + "right=\(yawCal.right.debugString)"
+        )
+        Log.line(
+            "[Posture]",
+            "  ear-shoulder angles: "
+            + "middle=\(String(format: "%.2f°", middle.earShoulderAngle))  "
+            + "forwardLean=\(String(format: "%.2f°", forwardLean.earShoulderAngle))  "
+            + "Δ=\(String(format: "%+.2f°", earForwardDelta))  "
+            + "forwardSign=\(forwardSign.map { String(format: "%+.0f", $0) } ?? "nil (symmetric)")"
         )
         return true
     }

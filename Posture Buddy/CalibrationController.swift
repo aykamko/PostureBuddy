@@ -22,16 +22,20 @@ final class CalibrationController: ObservableObject {
     private static let countdownBeatInterval: Duration = .seconds(1)
 
     // Burst-sample the pose estimator during the hold-after-beat window and take the
-    // median. Single-frame capture was catching detector spikes; a longer burst gives
+    // median. Single-frame capture was catching detector spikes; a short burst gives
     // a baseline that matches the user's steady state.
     private static let burstSampleInterval: Duration = .milliseconds(125)
-    private static let burstSampleCount: Int = 16
-    private static let burstMinSuccessfulSamples: Int = 10
+    private static let burstSampleCount: Int = 10
+    private static let burstMinSuccessfulSamples: Int = 6
 
-    private static let steps: [(instruction: String, voice: VoicePrompt)] = [
-        ("Look at the middle of your screen", .lookMiddle),
-        ("Look at the left of your screen", .lookLeft),
-        ("Look at the right of your screen", .lookRight),
+    // `voice == nil` uses a stub sound effect instead of a recorded prompt. Replace
+    // once we record a `.leanForward` voice clip. Order drives snapshot index → baseline
+    // slot mapping in `runFlow` (0=middle, 1=leanForward, 2=left, 3=right).
+    private static let steps: [(label: String, instruction: String, voice: VoicePrompt?)] = [
+        ("middle", "Look at the middle of your screen", .lookMiddle),
+        ("leanForward", "Now lean forward", nil),
+        ("left", "Sit up straight, then look left", .lookLeft),
+        ("right", "Look at the right of your screen", .lookRight),
     ]
 
     /// Starts a fresh guided calibration. If one was already running, it's cancelled first.
@@ -83,10 +87,12 @@ final class CalibrationController: ObservableObject {
             snapshots.append(angles)
         }
 
+        // Index order must match Self.steps: 0=middle, 1=leanForward, 2=left, 3=right.
         let committed = poseEstimator.calibrate(
             middle: snapshots[0],
-            left: snapshots[1],
-            right: snapshots[2]
+            forwardLean: snapshots[1],
+            left: snapshots[2],
+            right: snapshots[3]
         )
         guard committed else {
             await VoiceGuide.shared.say(.poseNotDetected)
@@ -104,11 +110,18 @@ final class CalibrationController: ObservableObject {
     /// Returns nil (after triggering cleanup + playing the failure prompt) if the pose
     /// estimator couldn't snapshot valid angles at the capture moment.
     private func captureSnapshot(
-        for step: (instruction: String, voice: VoicePrompt),
+        for step: (label: String, instruction: String, voice: VoicePrompt?),
         poseEstimator: PoseEstimator
     ) async throws -> PostureAngles? {
         instruction = step.instruction
-        await VoiceGuide.shared.say(step.voice)
+        if let voice = step.voice {
+            await VoiceGuide.shared.say(voice)
+        } else {
+            // Stub audio for positions without a recorded voice prompt (currently
+            // the lean-forward step). Using `playSlouch` because leaning forward is
+            // the posture it maps to — placeholder until we cut a real clip.
+            SoundEffects.playSlouch()
+        }
         try Task.checkCancellation()
         try await Task.sleep(for: Self.postVoicePause)
 
@@ -141,7 +154,7 @@ final class CalibrationController: ObservableObject {
         let telemetry = merged.yawTelemetry?.debugString ?? "n/a"
         Log.line(
             "[YawTelemetry]",
-            "\(step.voice.rawValue) (median of \(samples.count)): \(telemetry)"
+            "\(step.label) (median of \(samples.count)): \(telemetry)"
         )
 
         countdown = nil

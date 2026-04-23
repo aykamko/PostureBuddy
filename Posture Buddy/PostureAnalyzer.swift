@@ -45,18 +45,38 @@ nonisolated struct PostureAnalyzer {
         case .right: matched = baselines.right
         }
 
-        let earDev = abs(current.earShoulderAngle - matched.earShoulderAngle)
+        // Asymmetric scoring: only penalize deviations in the calibrated forward
+        // direction. `forwardSign` is +1 or -1 indicating which sign of (current -
+        // baseline) corresponds to leaning forward; multiplying by it gives a
+        // "forward component" where positive = forward lean. max(0, …) zeroes out
+        // backward lean. Falls back to symmetric `abs` if the calibration sample
+        // wasn't decisive enough to derive a sign.
+        let earDev = forwardDeviation(
+            current: current.earShoulderAngle,
+            baseline: matched.earShoulderAngle,
+            sign: baselines.forwardSign
+        )
         let earScore = max(0, 1.0 - earDev / Self.maxDeviation)
 
         let value: Float
         if let curHip = current.shoulderHipAngle, let baseHip = matched.shoulderHipAngle {
-            let hipDev = abs(curHip - baseHip)
+            let hipDev = forwardDeviation(
+                current: curHip,
+                baseline: baseHip,
+                sign: baselines.forwardSign
+            )
             let hipScore = max(0, 1.0 - hipDev / Self.maxDeviation)
             value = (0.6 * earScore + 0.4 * hipScore) * 100
         } else {
             value = earScore * 100
         }
         return (PostureScore(value: value), position)
+    }
+
+    private func forwardDeviation(current: Float, baseline: Float, sign: Float?) -> Float {
+        let signed = current - baseline
+        guard let sign else { return abs(signed) }   // no forward calibration → symmetric
+        return max(0, signed * sign)                  // forward only; backward = 0
     }
 
     private func pickBestSide(
@@ -92,9 +112,12 @@ nonisolated struct PostureAnalyzer {
         return best
     }
 
+    /// Signed angle (in degrees) of vector a→b from image-vertical, in [-90, +90].
+    /// Sign of the result reflects which side of vertical the vector tips toward;
+    /// scoring uses it to distinguish forward vs backward lean (see `forwardSign`).
     private func angleFromVertical(from a: CGPoint, to b: CGPoint) -> Float {
         let dx = Float(b.x - a.x)
         let dy = Float(b.y - a.y)
-        return atan2(abs(dx), abs(dy)) * 180 / .pi
+        return atan2(dx, abs(dy)) * 180 / .pi
     }
 }

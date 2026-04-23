@@ -306,12 +306,18 @@ struct YawClassification {
     }
 }
 
-// Three calibrated baselines + the adaptive yaw calibration derived from them.
+// Calibrated baselines + the adaptive yaw calibration derived from them.
+// `forwardLean` is captured at the same yaw as `middle` but with the user intentionally
+// slouching; `forwardSign` is the sign that (current − baseline) takes when the user
+// leans forward (derived from forwardLean − middle). Nil if the user's lean-forward
+// gesture didn't produce a confident enough delta — scoring falls back to symmetric.
 struct PostureBaselines {
     let middle: PostureAngles
+    let forwardLean: PostureAngles
     let left: PostureAngles
     let right: PostureAngles
     let yaw: YawCalibration
+    let forwardSign: Float?
 }
 
 enum CalibrationPosition: String {

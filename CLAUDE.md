@@ -15,6 +15,7 @@ iOS app that monitors sitting posture in real time using the front camera. The u
 - At runtime: the current frame's telemetry is projected into the selected feature pair (with EMA smoothing, see below), producing a `YawSignature`. That's matched to the **nearest** baseline by 2D Euclidean distance and scored against that baseline's angles. Scoring pauses only when there's no signature at all (no face detected, or the selected features aren't populated in the frame). The `classificationThreshold` still exists inside `YawCalibration` and is shown in frame logs as a `✓/✗` confidence indicator, but it **no longer gates scoring** — hard slouching pitches the head enough to drag the signature outside any baseline's tight threshold, and blocking scoring in exactly that case defeats the whole point. All three baselines are calibrated upright, so even a "wrong nearest" baseline produces a large ear-shoulder deviation when the user slouches, and the score correctly drops.
 - Side-profile scoring uses **same-side joints** (ear→shoulder→hip). Centerline joints (nose, neck, root) are anatomically offset from the visible shoulder and produce non-zero angles even in perfect posture, so they're not used for the score itself.
 - Hip often isn't visible (desk occludes it); scoring falls back to ear-shoulder alone when that's the case.
+- **Asymmetric scoring (forward-only penalty).** `angleFromVertical` returns a *signed* angle (drop-in replaced the old `abs(dx)` formulation), so ear-shoulder and shoulder-hip angles now live in [-90°, +90°] with sign indicating which side of vertical the line tips toward. At calibration, we capture a "lean forward briefly" sample at the middle yaw (see Guided calibration flow), compute `forwardSign = sign(forwardLean.earShoulderAngle − middle.earShoulderAngle)`, and stash it on `PostureBaselines`. At scoring time, `PostureAnalyzer.forwardDeviation(current, baseline, sign)` computes `max(0, (current − baseline) × sign)` — positive only in the forward direction, zero for backward lean. If the user's lean sample wasn't decisive (|Δ| < 1°), `forwardSign` is nil and scoring falls back to the old symmetric `abs(current − baseline)` behavior. Net effect: leaning back into your chair doesn't ding the score; slouching forward does.
 - **Brief classification pauses don't disturb downstream timers.** `ContentView.onChange` drops nil scores before forwarding to `PostureSoundCoach` / `NotificationManager`, so a single flickered frame can't cancel an in-flight slouch/recovery timer or reset the 30 s alert countdown. Long-horizon resets still happen via `pauseCapture` (scene phase change) and `calibration.start` — those call `reset()` / `update(score: nil)` explicitly. Without this filter the slouch and recovery sounds were effectively never firing because every ~200 ms pause interrupted them.
 
 ### Head-yaw classification: adaptive 2-feature selection
@@ -180,9 +181,11 @@ ContentView
 
 ## Dev Workflow
 
-- **Build via Xcode MCP** (`BuildProject` action) — gives structured error output.
-- **Launch on device with `./run.sh`** — uses `osascript` to send Cmd+R to Xcode. Requires Accessibility permission for `osascript` (first run prompts; granted via System Settings → Privacy & Security → Accessibility).
-- The `run.sh` script is at the project root; chmod +x'd.
+- **Default end-of-change loop** (Claude should do this after every meaningful code change, not just when asked):
+  1. Run `BuildProject` via the Xcode MCP — structured error output.
+  2. If the build succeeds, run `./run.sh` from the project root — uses `osascript` to send Cmd+R to Xcode and launch on the connected device.
+  3. If the build fails, fix the errors and repeat; don't call `run.sh` on a broken build.
+- `run.sh` requires Accessibility permission for `osascript` (first run prompts; granted via System Settings → Privacy & Security → Accessibility). It's at the project root, chmod +x'd.
 - Must test on a **physical device** — the Simulator has no camera.
 - **SourceKit diagnostics frequently show stale false positives** (e.g., "No such module 'UIKit'", "'AVAudioSession' is unavailable in macOS", "Cannot find type X"). If `BuildProject` returns success, the build is good — ignore stale SourceKit errors.
 
