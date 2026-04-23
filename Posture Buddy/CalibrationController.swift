@@ -36,8 +36,8 @@ final class CalibrationController: ObservableObject {
     // every prompt has a recorded clip, but we keep the optional for flexibility.
     private static let steps: [(label: String, instruction: String, voice: VoicePrompt?)] = [
         ("middle", "Sit up straight, look at the center", .sitStraightLookCenter),
-        ("left", "Look at the left of your screen", .lookLeft),
-        ("right", "Look at the right of your screen", .lookRight),
+        ("left", "Look to the left", .lookLeft),
+        ("right", "Look to the right", .lookRight),
         ("leanForward", "Look at the center and lean forward", .leanForward),
     ]
 
@@ -131,7 +131,9 @@ final class CalibrationController: ObservableObject {
         try await playBeat(number: 2, tick: 1)
 
         countdown = 1
-        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        // No haptic here — calibration often runs with the phone balanced on books
+        // or a stand, and a buzz can knock it over mid-session. The marimba capture
+        // tone below is enough feedback.
         SoundEffects.playCapture()
 
         // Burst-sample the pose estimator for ~1s so the baseline is a median across
@@ -163,11 +165,11 @@ final class CalibrationController: ObservableObject {
         return merged
     }
 
-    /// Sets the countdown number, plays the matching marimba tick + light haptic, then
-    /// waits one beat interval.
+    /// Sets the countdown number, plays the matching marimba tick, then waits one
+    /// beat interval. No haptic — a phone propped on books can be knocked over by
+    /// a buzz, and the tick is audible enough.
     private func playBeat(number: Int, tick: Int) async throws {
         countdown = number
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
         SoundEffects.playTick(index: tick)
         try await Task.sleep(for: Self.countdownBeatInterval)
     }
