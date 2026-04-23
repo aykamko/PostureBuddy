@@ -1,19 +1,30 @@
 import SwiftUI
 
-/// Side-profile caricature of a person sitting at a desk. The head + neck pivot
-/// forward at the shoulder as the score drops, mimicking forward-head posture
-/// (the same thing the ear-shoulder angle measures). Built from SwiftUI primitives —
-/// no custom asset, no SF Symbol dependency.
+/// "Posture Buddy" — the friendly mascot figure shown on the main screen as the
+/// app's primary user-facing visual. Side-profile caricature of someone sitting
+/// at a desk. Head + neck pivot forward at the shoulder as the score drops,
+/// mimicking forward-head posture (the same thing the ear-shoulder angle
+/// measures). Built from SwiftUI primitives — no custom asset, no SF Symbol.
 ///
 /// Color cue: the head + nose track the current grade color (green / yellow / red).
 /// This deliberately matches `ScoreHUDView`'s ring tint — both surfaces should
 /// "agree" at a glance. Don't refactor as redundant.
 ///
-/// Animation policy: this view is a pure function of `score`. Smooth interpolation
-/// is driven by the body-level `.animation(_:value:)` chain in `ContentView`, not
-/// by state inside this view.
-struct PostureFigureView: View {
+/// Mirroring: the figure faces the same direction the user appears to face in
+/// the (mirrored) camera preview. The mapping is empirically inverted from the
+/// "obvious" geometry — `dominantEar == .left` mirrors, `.right` doesn't. This
+/// is because Vision's anatomical left/right ear labels on the `.leftMirrored`
+/// front-camera buffer don't line up with the user's true anatomy in the way
+/// you'd naively expect; the mapping was determined by trying both and seeing
+/// which produced the matches-the-mirror result. `nil` (pre-calibration) →
+/// default right-facing pose.
+///
+/// Animation policy: this view is a pure function of `score` and `dominantEar`.
+/// Smooth interpolation is driven by the body-level `.animation(_:value:)` chain
+/// in `ContentView`, not by state inside this view.
+struct PostureBuddyView: View {
     let score: PostureScore?
+    let dominantEar: EarSide?
 
     // Fixed inner coordinate space so positions + the rotation anchor stay
     // deterministic across renders. `.position(x:y:)` on every shape — no
@@ -30,6 +41,12 @@ struct PostureFigureView: View {
             headNeck
         }
         .frame(width: Self.canvasSize.width, height: Self.canvasSize.height)
+        // Mirror horizontally based on which side Vision tracks. The condition
+        // is empirically `.left`-triggered (not `.right`, as raw anatomy would
+        // suggest) — see the doc-comment header for why. Mirroring also flips
+        // the head's clockwise pivot into counter-clockwise visually, so the
+        // head still leans toward the desk in either orientation.
+        .scaleEffect(x: dominantEar == .left ? -1 : 1, y: 1)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 

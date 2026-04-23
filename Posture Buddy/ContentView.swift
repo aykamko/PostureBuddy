@@ -49,10 +49,13 @@ struct ContentView: View {
             .animation(.easeInOut(duration: 0.2), value: calibration.instruction)
             .animation(.easeInOut(duration: 0.2), value: showTrackingFailedAlert)
             .animation(.easeInOut(duration: videoFadeDuration), value: videoFadeOpacity)
-            // Drives PostureFigureView's head pivot. 0.4s feels natural for body
+            // Drives PostureBuddyView's head pivot. 0.4s feels natural for body
             // motion (slower than the snappy 0.2s state changes).
             .animation(.easeInOut(duration: 0.4), value: poseEstimator.currentPose?.score?.value)
             .animation(.easeInOut(duration: 0.2), value: showDebugOverlay)
+            // Snap mirroring (don't animate the buddy "flipping" through its
+            // mid-flip transparent state when calibration commits).
+            .animation(nil, value: poseEstimator.dominantEar)
             .task {
                 poseEstimator.updateOrientation(UIDevice.current.orientation.visionOrientation)
                 await cameraManager.requestAccessAndSetup()
@@ -120,16 +123,19 @@ struct ContentView: View {
                 .ignoresSafeArea()
                 .allowsHitTesting(false)
 
-            // Default visual is the friendly figure; Debug toggle (under
+            // Default visual is the Posture Buddy mascot; Debug toggle (under
             // CalibrateButton) swaps it for the raw skeleton overlay.
             if showDebugOverlay {
                 PostureOverlayView(detectedPose: poseEstimator.currentPose)
                     .ignoresSafeArea()
                     .rotatedIfUpsideDown(isUpsideDown)
             } else {
-                PostureFigureView(score: poseEstimator.currentPose?.score)
-                    .ignoresSafeArea()
-                    .rotatedIfUpsideDown(isUpsideDown)
+                PostureBuddyView(
+                    score: poseEstimator.currentPose?.score,
+                    dominantEar: poseEstimator.dominantEar
+                )
+                .ignoresSafeArea()
+                .rotatedIfUpsideDown(isUpsideDown)
             }
 
             VStack {

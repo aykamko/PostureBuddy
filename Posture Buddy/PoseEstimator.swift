@@ -23,6 +23,12 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
     /// calibrate button label. Flips false on `startTracking()` or after a
     /// fresh `calibrate()` commit.
     @Published var hasSavedBaselines: Bool = false
+    /// The camera-facing side of the user's body, locked in at calibration time.
+    /// Drives the Posture Buddy figure's mirroring (`.right` → buddy faces left,
+    /// matching the user's mirrored reflection in the camera preview). Mirrors
+    /// `PostureBaselines.dominantEar` for SwiftUI observability — the underlying
+    /// authority is still on the baselines struct, this is a publish-shadow.
+    @Published var dominantEar: EarSide?
 
     nonisolated private let analyzer = PostureAnalyzer()
     private let lastProcessedTime = OSAllocatedUnfairLock(initialState: CFTimeInterval(0))
@@ -74,6 +80,7 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
         if let saved = BaselinesStore.load() {
             baselines.withLock { $0 = saved }
             hasSavedBaselines = true
+            dominantEar = saved.dominantEar
         }
     }
 
@@ -126,6 +133,7 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
         BaselinesStore.clear()
         isCalibrated = false
         hasSavedBaselines = false
+        dominantEar = nil
     }
 
     /// Commits the baselines. Returns false if the adaptive yaw-feature selector
@@ -183,6 +191,7 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
         BaselinesStore.save(b)
         isCalibrated = true
         hasSavedBaselines = false
+        dominantEar = dominantEarSide
         lastLogState.withLock { $0 = .awaitingCalibration }  // force next frame to log as a transition
         Log.line(
             "[Posture]",

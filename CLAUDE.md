@@ -103,7 +103,16 @@ Workflow:
 4. Replace files in `Posture Buddy/VoicePrompts/`. Filenames must match `VoicePrompt.rawValue` exactly.
 
 ### Battery: drop the video preview post-calibration
-- Once `poseEstimator.isCalibrated` becomes true, `ContentView` waits 3 s, fades a black overlay over the preview in ~1 s, then *removes* the `CameraPreviewView` from the view hierarchy. That deallocates the `AVCaptureVideoPreviewLayer`, which is the main GPU consumer — the capture session and `PoseEstimator` keep running unchanged, so pose detection and scoring are unaffected. By default `PostureFigureView` (a stylized side-profile figure that pivots forward at the shoulders as the score drops) renders above the dimmer; the on-screen *Debug* toggle below CalibrateButton swaps it for `PostureOverlayView` (skeleton + face landmarks). Either way the upper-layer visual stays visible after the camera fade.
+- Once `poseEstimator.isCalibrated` becomes true, `ContentView` waits 3 s, fades a black overlay over the preview in ~1 s, then *removes* the `CameraPreviewView` from the view hierarchy. That deallocates the `AVCaptureVideoPreviewLayer`, which is the main GPU consumer — the capture session and `PoseEstimator` keep running unchanged, so pose detection and scoring are unaffected. By default the **Posture Buddy** mascot (`PostureBuddyView`) renders above the dimmer; the on-screen *Debug* toggle below CalibrateButton swaps it for `PostureOverlayView` (skeleton + face landmarks). Either way the upper-layer visual stays visible after the camera fade.
+
+### Posture Buddy mascot
+The friendly side-profile caricature that's the app's primary user-facing visual. Lives at `Views/PostureBuddyView.swift`. Implementation notes:
+- Built from SwiftUI primitives (Path / Capsule / Circle / Rectangle) inside a fixed 220×260 inner coordinate space; every shape uses `.position(x:y:)` so the head's rotation anchor (the shoulder pivot, canvas (35, 95)) stays deterministic across renders.
+- Static layers (white/low-opacity): chair seat, chair back, desk, desk leg, lower body limbs (single stroked Path with round caps for ball-joint look), torso, arm, hand. Pivoting layer: head + neck + nose nub, wrapped in an 80×90 container that gets `.rotationEffect(.degrees(leanDegrees), anchor: UnitPoint(x: 0.5, y: 1.0))`.
+- **Lean math**: `PostureBuddyView.leanDegrees(for: PostureScore?)` — pure function. Nil/score ≥ 90 → 0°, ≤ 30 → 35°, linear in between. The score is already EMA-smoothed in `PoseEstimator`; smoothness in the UI comes from the body-level `.animation(.easeInOut(duration: 0.4), value: score?.value)` modifier in `ContentView`, not from state inside the view.
+- **Color cue**: head + nose track `score?.grade.swiftUIColor ?? .white` (green / yellow / red). This deliberately matches the `ScoreHUDView` ring tint — both surfaces should "agree" at a glance. Don't refactor as redundant.
+- **Mirroring**: the buddy faces the same direction the user appears to face in the (mirrored) camera preview. The trigger condition is `dominantEar == .left` → `.scaleEffect(x: -1, y: 1)`, which is **empirically inverted** from the naive "right-ear-visible-means-camera-on-right" reading. The reason: Vision's anatomical left/right ear labels on the `.leftMirrored` front-camera buffer don't line up with the user's true anatomy in the way you'd naively expect. The mapping was determined by trying both signs and picking the one whose visual matched the user's mirrored reflection. Mirroring also flips the head's clockwise pivot to counter-clockwise visually, so the head still leans toward the desk in either orientation. Pre-calibration / nil → default right-facing.
+- **`PoseEstimator.dominantEar: EarSide?`** is a `@Published` shadow of `PostureBaselines.dominantEar` — the baselines struct is the persisted authority; the published property exists so SwiftUI can observe mirroring changes. Synced in `init` (load), `calibrate()` (commit), `resetCalibration()` (clear). The `dominantEar` change is *not* animated (`.animation(nil, value: dominantEar)` in ContentView) — instant flip, otherwise the mirror crossfade is unsightly.
 - Reset path: when `isCalibrated` goes false (user taps Recalibrate), the preview is re-added to the hierarchy immediately and the dimmer fades off over 1 s so you can see yourself during the new calibration flow. Scene-phase changes (background/foreground) do **not** touch the fade state — returning from background on a calibrated session keeps the preview hidden.
 - The dimmer sits between the camera preview and the skeleton layer in the `ZStack`, so slouching feedback stays crisp on top of a plain black background.
 
@@ -173,7 +182,7 @@ Posture Buddy/                          (iOS target)
 ├── Views/                              Leaf SwiftUI views composed by ContentView
 │   ├── ScoreHUDView.swift              108pt circle, color-coded score
 │   ├── CalibrateButton.swift           Capsule button, flips to red "Cancel" while calibrating
-│   ├── PostureFigureView.swift         Side-profile caricature; head+neck pivot forward at the shoulder as score drops; default after-calibration visual
+│   ├── PostureBuddyView.swift          The "Posture Buddy" mascot — side-profile caricature; head+neck pivot forward as score drops; mirrored by dominantEar; default after-calibration visual
 │   ├── TrackingLoadingView.swift       Spinner + message while pose model is loading
 │   ├── AlertOverlay.swift              Custom modal (native .alert doesn't respect manual rotation)
 │   └── GuidedCalibrationOverlay.swift  Instruction text + big countdown number
@@ -210,7 +219,7 @@ PoseEstimator.captureOutput (nonisolated, 10 FPS throttled)
     ▼  Task { @MainActor } publishes DetectedPose (keypoints w/ isStale + faceLandmarks + score)
 ContentView
     ├── CameraPreviewView        (bottom layer, not rotated; faded out + removed 3 s after calibration)
-    ├── PostureFigureView | PostureOverlayView   (Debug toggle — default is the figure pivoting from score; debug shows skeleton + face landmarks)
+    ├── PostureBuddyView | PostureOverlayView    (Debug toggle — default is the Posture Buddy mascot pivoting from score and mirrored by dominantEar; debug shows skeleton + face landmarks)
     ├── ScoreHUDView             (108pt circle, color-coded score)
     ├── CalibrateButton / Debug toggle / TrackingLoadingView / GuidedCalibrationOverlay / AlertOverlay
     └── onChange(score) → NotificationManager.update + PostureSoundCoach.update (skips nil scores)
