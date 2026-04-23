@@ -2,7 +2,8 @@ import SwiftUI
 
 struct CalibrateButton: View {
     let isCalibrated: Bool
-    let isActive: Bool   // true during audio-prime or countdown phases
+    let hasSavedBaselines: Bool   // true when restored from disk, awaiting "Start Tracking" tap
+    let isActive: Bool            // true during audio-prime or countdown phases
     let action: () -> Void
 
     var body: some View {
@@ -19,18 +20,24 @@ struct CalibrateButton: View {
         }
     }
 
+    // Priority: cancel > recalibrate > start tracking > set baseline
     private var icon: String {
         if isActive { return "xmark.circle.fill" }
-        return isCalibrated ? "arrow.clockwise.circle.fill" : "scope"
+        if isCalibrated { return "arrow.clockwise.circle.fill" }
+        if hasSavedBaselines { return "play.circle.fill" }
+        return "scope"
     }
 
     private var label: String {
         if isActive { return "Cancel" }
-        return isCalibrated ? "Recalibrate" : "Set Baseline Posture"
+        if isCalibrated { return "Recalibrate" }
+        if hasSavedBaselines { return "Start Tracking" }
+        return "Set Baseline Posture"
     }
 
     private var background: Color {
         if isActive { return .red.opacity(0.8) }
-        return isCalibrated ? Color.white.opacity(0.2) : Color.accentColor
+        if isCalibrated { return Color.white.opacity(0.2) }
+        return Color.accentColor   // both Start Tracking and Set Baseline are primary actions
     }
 }

@@ -156,10 +156,17 @@ struct ContentView: View {
 
                 Group {
                     if poseEstimator.isTrackingReady {
-                        CalibrateButton(isCalibrated: poseEstimator.isCalibrated,
-                                        isActive: calibration.isActive) {
+                        CalibrateButton(
+                            isCalibrated: poseEstimator.isCalibrated,
+                            hasSavedBaselines: poseEstimator.hasSavedBaselines,
+                            isActive: calibration.isActive
+                        ) {
                             if calibration.isActive {
                                 calibration.cancel()
+                            } else if poseEstimator.hasSavedBaselines && !poseEstimator.isCalibrated {
+                                // "Start Tracking" — restored baselines from disk; flip
+                                // tracking on without re-running calibration.
+                                poseEstimator.startTracking()
                             } else {
                                 calibration.start(
                                     poseEstimator: poseEstimator,

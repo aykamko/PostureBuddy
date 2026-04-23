@@ -18,6 +18,11 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
     @Published var currentPose: DetectedPose?
     @Published var isCalibrated: Bool = false
     @Published var isTrackingReady: Bool = false
+    /// True at app launch when a saved calibration was loaded from disk and the
+    /// user hasn't tapped "Start Tracking" yet. Used by the UI to swap the
+    /// calibrate button label. Flips false on `startTracking()` or after a
+    /// fresh `calibrate()` commit.
+    @Published var hasSavedBaselines: Bool = false
 
     nonisolated private let analyzer = PostureAnalyzer()
     private let lastProcessedTime = OSAllocatedUnfairLock(initialState: CFTimeInterval(0))
@@ -39,10 +44,9 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
     // "dominant" (camera-side) one. Only that ear gets stale-cached — the occluded
     // far-side ear can occasionally flicker into view at extreme head yaws and then
     // render as a ghost after the user's head turns back, which looks wrong.
+    // The committed dominant ear lives on `PostureBaselines.dominantEar`; the
+    // hot-path read in `extractKeypoints` goes through the baselines lock.
     private let earSightings = OSAllocatedUnfairLock<(left: Int, right: Int)>(initialState: (0, 0))
-    // The dominant ear, locked in at calibration. nil pre-calibration → neither ear
-    // is stale-eligible (ears just disappear when not detected).
-    private let dominantEar = OSAllocatedUnfairLock<VNHumanBodyPoseObservation.JointName?>(initialState: nil)
 
     // Most-recent per-frame angles (for calibration capture)
     private let currentAngles = OSAllocatedUnfairLock<PostureAngles?>(initialState: nil)
@@ -59,6 +63,31 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
         case paused
         case awaitingCalibration
         case noValidSide
+    }
+
+    override init() {
+        super.init()
+        // Try to restore a previous calibration. If found, baselines are live but
+        // `isCalibrated` stays false until the user taps "Start Tracking" — that
+        // way the camera preview is visible while they sit down (the post-
+        // calibration auto-fade only fires once `isCalibrated` flips true).
+        if let saved = BaselinesStore.load() {
+            baselines.withLock { $0 = saved }
+            hasSavedBaselines = true
+        }
+    }
+
+    /// User tapped "Start Tracking" with a previously-saved calibration loaded.
+    /// Flips `isCalibrated` true so scoring / coaching / video-fade kick in,
+    /// without touching the saved file.
+    func startTracking() {
+        guard !isCalibrated, baselines.withLock({ $0 }) != nil else { return }
+        emaState.withLock { $0 = 100 }
+        smoothedYawSignature.withLock { $0 = nil }
+        isCalibrated = true
+        hasSavedBaselines = false
+        lastLogState.withLock { $0 = .awaitingCalibration }
+        Log.line("[Posture]", "started tracking with restored baselines")
     }
 
     func updateOrientation(_ orientation: CGImagePropertyOrientation) {
@@ -92,8 +121,11 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
         // Clear ear tallies so recalibration picks the dominant ear from fresh
         // observation (e.g. user flipped the phone to the other side of their desk).
         earSightings.withLock { $0 = (0, 0) }
-        dominantEar.withLock { $0 = nil }
+        // Drop the saved file too — keeps disk and in-memory in sync. Cancelling
+        // a recalibration mid-flow leaves the user uncalibrated everywhere.
+        BaselinesStore.clear()
         isCalibrated = false
+        hasSavedBaselines = false
     }
 
     /// Commits the baselines. Returns false if the adaptive yaw-feature selector
@@ -126,27 +158,31 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
             ? (earForwardDelta >= 0 ? 1.0 : -1.0)
             : nil
 
+        // Decide the camera-side ear from the sightings accumulated during the
+        // calibration period. Break ties toward .left (arbitrary — if neither
+        // ear was seen at all, the user can recalibrate).
+        let (lEar, rEar) = earSightings.withLock { $0 }
+        let dominantEarSide: EarSide = lEar >= rEar ? .left : .right
+        Log.line(
+            "[Posture]",
+            "  dominant ear = \(dominantEarSide.earJoint.rawValue)  (left seen \(lEar), right seen \(rEar))"
+        )
+
         let b = PostureBaselines(
             middle: middle,
             forwardLean: forwardLean,
             left: left,
             right: right,
             yaw: yawCal,
-            forwardSign: forwardSign
+            forwardSign: forwardSign,
+            dominantEar: dominantEarSide
         )
         baselines.withLock { $0 = b }
         emaState.withLock { $0 = 100 }
-        // Decide the camera-side ear from the sightings accumulated during the
-        // calibration period. Break ties toward .leftEar (arbitrary — if neither
-        // ear was seen at all, the user can recalibrate).
-        let (lEar, rEar) = earSightings.withLock { $0 }
-        let dominant: VNHumanBodyPoseObservation.JointName = lEar >= rEar ? .leftEar : .rightEar
-        dominantEar.withLock { $0 = dominant }
-        Log.line(
-            "[Posture]",
-            "  dominant ear = \(dominant.rawValue)  (left seen \(lEar), right seen \(rEar))"
-        )
+        // Persist for next launch.
+        BaselinesStore.save(b)
         isCalibrated = true
+        hasSavedBaselines = false
         lastLogState.withLock { $0 = .awaitingCalibration }  // force next frame to log as a transition
         Log.line(
             "[Posture]",
@@ -361,10 +397,10 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
         }
 
         // Dynamic stale-eligibility set: always-eligible joints plus the dominant
-        // ear once calibration has locked it in.
+        // ear once calibration has locked it in (committed to PostureBaselines).
         var eligible = Self.alwaysStaleEligible
-        if let dominant = dominantEar.withLock({ $0 }) {
-            eligible.insert(dominant)
+        if let dominantSide = baselines.withLock({ $0?.dominantEar }) {
+            eligible.insert(dominantSide.earJoint)
         }
 
         // Merge with the last-known cache. For eligible joints: fresh writes through

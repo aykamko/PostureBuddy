@@ -47,6 +47,14 @@ Yaw in our side-profile setup isn't one-dimensional. A single scalar (any direct
 - Face landmarks are also rendered on the overlay as **cyan** dots + bounding box for debugging — distinguishable from the white body keypoints (and from purple stale-keypoint markers). See `PostureOverlayView.swift`.
 - Landmark points are in `VNFaceLandmarkRegion2D.normalizedPoints`, which are *bounding-box-local* (0-1 within the face rect). `extractFaceLandmarks(from:)` converts them to image-normalized coords so they share the skeleton's coordinate system (needed for drawing, not for yaw features which use bbox-local coords directly).
 
+### Calibration persistence + Start-Tracking flow
+- `PostureBaselines` is `Codable` and round-trips through **`BaselinesStore.swift`** (JSON in `~/Library/Application Support/baselines.json` inside the app sandbox). All nested types — `PostureAngles`, `YawTelemetry`, `YawSignature`, `YawSelection`, `YawCalibration`, `EarSide`, the two feature enums — are `Codable` too.
+- `PoseEstimator.init` calls `BaselinesStore.load()`. On success, baselines are populated **but `isCalibrated` stays false** — the published `hasSavedBaselines: Bool` flips true so the calibrate button reads **"Start Tracking"** instead of "Set Baseline Posture." Tapping it calls `poseEstimator.startTracking()` which flips `isCalibrated` true and lets the existing scoring / coaching / video-fade pipelines kick in. The deliberate two-step (load on launch, start on tap) gives the user time to sit down before scoring begins; the post-calibration auto-fade triggers off the `isCalibrated` transition either way.
+- `calibrate()` writes the new baselines to disk via `BaselinesStore.save(...)`. `resetCalibration()` calls `BaselinesStore.clear()` so cancelling a recalibration leaves disk and in-memory consistent (both empty) — no "ghost" saved calibration to surprise the user next launch.
+- `dominantEar` (the camera-side ear used for stale-keypoint eligibility) lives on `PostureBaselines` as an `EarSide` enum so it serializes cleanly. The hot-path read in `extractKeypoints` goes through `baselines.withLock { $0?.dominantEar?.earJoint }` — single lock acquire, no separate cache.
+- `CalibrateButton` priority order: `isActive` → "Cancel" / `isCalibrated` → "Recalibrate" / `hasSavedBaselines` → "Start Tracking" / else → "Set Baseline Posture." Recalibrating from the "Start Tracking" state takes two taps (Start, then Recalibrate) — acceptable since the user came in expecting to use existing calibration.
+- Schema-mismatch path: if `JSONDecoder.decode(PostureBaselines.self, from:)` fails after a struct-shape change (e.g. a future field is added), `BaselinesStore.load()` logs the error and returns nil. The user sees "Set Baseline Posture" on next launch and re-calibrates — no data migration needed.
+
 ### Guided calibration flow
 Owned by `CalibrationController` (a `@MainActor` `ObservableObject`). The controller publishes `instruction: String?` and `countdown: Int?`; `ContentView` observes those and renders `GuidedCalibrationOverlay`. All flow logic — voice prompts, marimba ticks, haptics, snapshot capture, cancellation — lives in the controller so `ContentView` only composes views.
 
@@ -144,7 +152,9 @@ Posture Buddy/                          (iOS target)
 ├── PostureAnalyzer.swift               Pure math: picks best side (ear+shoulder), computes signed ear-shoulder angle, asymmetric scoring vs baseline
 ├── PostureModels.swift                 Data types: DetectedPose, Keypoint, FaceLandmarks, PostureScore/Grade,
 │                                       PostureAngles, YawTelemetry, YawSignature, DirectionFeature,
-│                                       FrontalityFeature, YawSelection, YawCalibration, PostureBaselines (incl. forwardLean + forwardSign)
+│                                       FrontalityFeature, YawSelection, YawCalibration, EarSide,
+│                                       PostureBaselines (Codable; incl. forwardLean + forwardSign + dominantEar)
+├── BaselinesStore.swift                JSON persistence for PostureBaselines (Application Support/baselines.json)
 ├── PostureGrade+UI.swift               SwiftUI-bridge: PostureScore.Grade.swiftUIColor
 ├── PostureOverlayView.swift            SwiftUI Canvas drawing skeleton + face landmarks (white=fresh, purple=stale, cyan=face)
 ├── CalibrationController.swift         @MainActor ObservableObject driving the 4-position guided-calibration flow

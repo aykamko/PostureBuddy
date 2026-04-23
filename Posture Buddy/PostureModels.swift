@@ -67,7 +67,7 @@ struct PostureScore {
 // Baseline = same struct captured during calibration at one head position.
 // Hip/shoulder-hip angle was dropped — the desk consistently occluded the hip in
 // this camera setup, so scoring it made the app less reliable, not more.
-struct PostureAngles {
+struct PostureAngles: Codable {
     let earShoulderAngle: Float       // degrees from image-vertical
     // Raw candidate features for yaw classification. Nil if face wasn't detected.
     // The analyzer projects this into a `YawSignature` at scoring time using the
@@ -77,7 +77,7 @@ struct PostureAngles {
 
 // A 2D point in the feature space chosen by calibration. Comparable across frames
 // because both sides of any comparison use the same YawSelection extractor.
-nonisolated struct YawSignature {
+nonisolated struct YawSignature: Codable {
     let direction: Float
     let frontality: Float
 
@@ -96,7 +96,7 @@ nonisolated struct YawSignature {
 // for classification yet — the goal is to log them across middle/left/right during
 // calibration and see which pair of axes actually separates the three positions in
 // practice. Once we pick a pair, we can replace `YawSignature` and drop this struct.
-nonisolated struct YawTelemetry {
+nonisolated struct YawTelemetry: Codable {
     let medianX: Float?                // current direction signal (medianLine x-offset, bbox-local)
     let noseCrestX: Float?             // alt direction: nose-bridge centerline centroid offset
     let noseCentroidX: Float?          // alt direction: full `nose` region centroid offset
@@ -183,7 +183,7 @@ nonisolated struct YawTelemetry {
 
 /// One of several candidate signals for left/right head rotation. The right one depends
 /// on camera angle / user anatomy — we pick the best via calibration.
-enum DirectionFeature: String, CaseIterable {
+enum DirectionFeature: String, CaseIterable, Codable {
     case medianLine
     case noseCrest
     case noseCentroid
@@ -199,7 +199,7 @@ enum DirectionFeature: String, CaseIterable {
 
 /// Candidate signals for how frontal the face is (distinguishing "deep profile" from
 /// "3/4 view toward camera"). Picked adaptively at calibration.
-enum FrontalityFeature: String, CaseIterable {
+enum FrontalityFeature: String, CaseIterable, Codable {
     case eyeSeparationOverHeight
     case contourSpreadOverHeight
     case allLandmarksSpread
@@ -214,7 +214,7 @@ enum FrontalityFeature: String, CaseIterable {
 }
 
 /// The chosen pair of features. Projects a raw YawTelemetry into a 2D YawSignature.
-struct YawSelection {
+struct YawSelection: Codable {
     let direction: DirectionFeature
     let frontality: FrontalityFeature
 
@@ -228,7 +228,7 @@ struct YawSelection {
 /// the three baseline signatures, and a data-derived classification threshold. The
 /// threshold is half the minimum pairwise distance among the three baselines, so each
 /// baseline gets a Voronoi-ish acceptance radius that never overlaps its neighbors.
-struct YawCalibration {
+struct YawCalibration: Codable {
     let selection: YawSelection
     let middle: YawSignature
     let left: YawSignature
@@ -321,13 +321,28 @@ struct YawClassification {
 // slouching; `forwardSign` is the sign that (current − baseline) takes when the user
 // leans forward (derived from forwardLean − middle). Nil if the user's lean-forward
 // gesture didn't produce a confident enough delta — scoring falls back to symmetric.
-struct PostureBaselines {
+// `dominantEar` is the camera-side ear, derived during calibration from accumulated
+// sightings; only that ear is stale-cached at runtime (see PoseEstimator).
+// Codable so the whole bundle round-trips through `BaselinesStore` to disk.
+struct PostureBaselines: Codable {
     let middle: PostureAngles
     let forwardLean: PostureAngles
     let left: PostureAngles
     let right: PostureAngles
     let yaw: YawCalibration
     let forwardSign: Float?
+    let dominantEar: EarSide?
+}
+
+/// Which side of the user's body faces the camera. Stored on `PostureBaselines`
+/// instead of a `VNHumanBodyPoseObservation.JointName` because the latter isn't
+/// directly Codable; this enum maps onto either ear via `jointName`.
+enum EarSide: String, Codable {
+    case left, right
+
+    var earJoint: VNHumanBodyPoseObservation.JointName {
+        self == .left ? .leftEar : .rightEar
+    }
 }
 
 enum CalibrationPosition: String {
