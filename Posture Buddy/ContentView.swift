@@ -133,9 +133,9 @@ struct ContentView: View {
                         }
                     } label: {
                         Image(systemName: isVideoHiddenOrHiding ? "video.slash.fill" : "video.fill")
-                            .font(.title2)
+                            .font(.largeTitle)
                             .foregroundStyle(.white)
-                            .padding(12)
+                            .padding(20)
                             .background(Circle().fill(.black.opacity(0.4)))
                     }
                     .padding()
