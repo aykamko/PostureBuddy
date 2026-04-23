@@ -11,20 +11,12 @@ struct PostureOverlayView: View {
         // Neck to head and shoulders
         (.neck, .nose),
         (.neck, .leftShoulder), (.neck, .rightShoulder),
-        // Ears to shoulders (side profile spine line)
+        // Ears to shoulders (side-profile spine line — the one used for scoring)
         (.leftEar, .leftShoulder), (.rightEar, .rightShoulder),
-        // Torso
         (.leftShoulder, .rightShoulder),
-        (.leftShoulder, .leftHip), (.rightShoulder, .rightHip),
-        (.leftHip, .rightHip),
-        (.leftHip, .root), (.rightHip, .root),
-        // Arms
-        (.leftShoulder, .leftElbow), (.leftElbow, .leftWrist),
-        (.rightShoulder, .rightElbow), (.rightElbow, .rightWrist),
-        // Legs
-        (.leftHip, .leftKnee), (.leftKnee, .leftAnkle),
-        (.rightHip, .rightKnee), (.rightKnee, .rightAnkle),
     ]
+
+    private static let staleColor = Color(red: 0.7, green: 0.4, blue: 1.0)  // purple
 
     var body: some View {
         Canvas { context, size in
@@ -32,16 +24,20 @@ struct PostureOverlayView: View {
             let kp = pose.keypoints
             let lineColor = pose.score?.grade.swiftUIColor ?? .white.opacity(0.6)
 
-            // Body skeleton
+            // Body skeleton. A connection is purple if either endpoint is stale
+            // (live frame didn't detect it; using last-known position) so the user
+            // can tell when the overlay is partially extrapolated.
             for (a, b) in Self.connections {
-                guard let ptA = kp[a], let ptB = kp[b] else { continue }
+                guard let kpA = kp[a], let kpB = kp[b] else { continue }
+                let color = (kpA.isStale || kpB.isStale) ? Self.staleColor : lineColor
                 var path = Path()
-                path.move(to: visionToCanvas(ptA, in: size))
-                path.addLine(to: visionToCanvas(ptB, in: size))
-                context.stroke(path, with: .color(lineColor), lineWidth: 3)
+                path.move(to: visionToCanvas(kpA.location, in: size))
+                path.addLine(to: visionToCanvas(kpB.location, in: size))
+                context.stroke(path, with: .color(color), lineWidth: 3)
             }
-            for (_, point) in kp {
-                drawDot(at: visionToCanvas(point, in: size), radius: 5, color: .white, in: &context)
+            for (_, keypoint) in kp {
+                let color: Color = keypoint.isStale ? Self.staleColor : .white
+                drawDot(at: visionToCanvas(keypoint.location, in: size), radius: 5, color: color, in: &context)
             }
 
             // Face landmarks (debug overlay — cyan to stand out from the white body dots)

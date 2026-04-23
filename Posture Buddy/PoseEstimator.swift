@@ -31,6 +31,18 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
     private let visionOrientation = OSAllocatedUnfairLock(initialState: CGImagePropertyOrientation.leftMirrored)
     private let lastLogTime = OSAllocatedUnfairLock(initialState: CFTimeInterval(0))
     private let lastLogState = OSAllocatedUnfairLock<FrameLogState>(initialState: .noValidSide)
+    // Last-known 2D location per joint. Frames that drop a joint (low confidence for
+    // a frame or two) fall back to this cache so the skeleton stops flickering.
+    // Stale points are surfaced to the UI via `Keypoint.isStale` so they render purple.
+    private let lastKnownKeypoints = OSAllocatedUnfairLock<[VNHumanBodyPoseObservation.JointName: CGPoint]>(initialState: [:])
+    // Running counters used at calibration commit to decide which ear is the
+    // "dominant" (camera-side) one. Only that ear gets stale-cached — the occluded
+    // far-side ear can occasionally flicker into view at extreme head yaws and then
+    // render as a ghost after the user's head turns back, which looks wrong.
+    private let earSightings = OSAllocatedUnfairLock<(left: Int, right: Int)>(initialState: (0, 0))
+    // The dominant ear, locked in at calibration. nil pre-calibration → neither ear
+    // is stale-eligible (ears just disappear when not detected).
+    private let dominantEar = OSAllocatedUnfairLock<VNHumanBodyPoseObservation.JointName?>(initialState: nil)
 
     // Most-recent per-frame angles (for calibration capture)
     private let currentAngles = OSAllocatedUnfairLock<PostureAngles?>(initialState: nil)
@@ -77,6 +89,10 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
         baselines.withLock { $0 = nil }
         emaState.withLock { $0 = 100 }
         smoothedYawSignature.withLock { $0 = nil }
+        // Clear ear tallies so recalibration picks the dominant ear from fresh
+        // observation (e.g. user flipped the phone to the other side of their desk).
+        earSightings.withLock { $0 = (0, 0) }
+        dominantEar.withLock { $0 = nil }
         isCalibrated = false
     }
 
@@ -120,6 +136,16 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
         )
         baselines.withLock { $0 = b }
         emaState.withLock { $0 = 100 }
+        // Decide the camera-side ear from the sightings accumulated during the
+        // calibration period. Break ties toward .leftEar (arbitrary — if neither
+        // ear was seen at all, the user can recalibrate).
+        let (lEar, rEar) = earSightings.withLock { $0 }
+        let dominant: VNHumanBodyPoseObservation.JointName = lEar >= rEar ? .leftEar : .rightEar
+        dominantEar.withLock { $0 = dominant }
+        Log.line(
+            "[Posture]",
+            "  dominant ear = \(dominant.rawValue)  (left seen \(lEar), right seen \(rEar))"
+        )
         isCalibrated = true
         lastLogState.withLock { $0 = .awaitingCalibration }  // force next frame to log as a transition
         Log.line(
@@ -294,28 +320,70 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
         }
     }
 
+    // Only the joints we actually draw / use for scoring. Face-facing upper body only;
+    // arms, hips, legs never contributed to the posture score and the desk occluded
+    // them anyway.
+    nonisolated private static let trackedJoints: [VNHumanBodyPoseObservation.JointName] = [
+        .nose, .leftEye, .rightEye,
+        .leftEar, .rightEar,
+        .neck,
+        .leftShoulder, .rightShoulder
+    ]
+
+    // Joints that are always cached + fall back to last-known when this frame drops
+    // them. Ears are handled separately — only the calibration-determined dominant
+    // (camera-side) ear is stale-eligible at runtime; the far-side ear can flicker
+    // in briefly at extreme yaws and we don't want it ghosting afterward.
+    nonisolated private static let alwaysStaleEligible: Set<VNHumanBodyPoseObservation.JointName> = [
+        .nose, .leftEye, .rightEye,
+        .neck,
+        .leftShoulder, .rightShoulder
+    ]
+
     nonisolated private func extractKeypoints(
         from observation: VNHumanBodyPoseObservation
-    ) -> [VNHumanBodyPoseObservation.JointName: CGPoint] {
-        let joints: [VNHumanBodyPoseObservation.JointName] = [
-            .nose, .leftEye, .rightEye,
-            .leftEar, .rightEar,
-            .neck,
-            .leftShoulder, .rightShoulder,
-            .leftElbow, .rightElbow,
-            .leftWrist, .rightWrist,
-            .leftHip, .rightHip,
-            .leftKnee, .rightKnee,
-            .leftAnkle, .rightAnkle,
-            .root
-        ]
-        var result: [VNHumanBodyPoseObservation.JointName: CGPoint] = [:]
-        for joint in joints {
+    ) -> [VNHumanBodyPoseObservation.JointName: Keypoint] {
+        // Collect whatever Vision confidently found this frame.
+        var fresh: [VNHumanBodyPoseObservation.JointName: CGPoint] = [:]
+        for joint in Self.trackedJoints {
             if let pt = try? observation.recognizedPoint(joint), pt.confidence >= 0.3 {
-                result[joint] = pt.location
+                fresh[joint] = pt.location
             }
         }
-        return result
+
+        // Tally ear sightings so calibrate() can decide which side is dominant.
+        // Cheap single-lock update regardless of calibration state.
+        if fresh[.leftEar] != nil || fresh[.rightEar] != nil {
+            earSightings.withLock { counts in
+                if fresh[.leftEar] != nil { counts.left += 1 }
+                if fresh[.rightEar] != nil { counts.right += 1 }
+            }
+        }
+
+        // Dynamic stale-eligibility set: always-eligible joints plus the dominant
+        // ear once calibration has locked it in.
+        var eligible = Self.alwaysStaleEligible
+        if let dominant = dominantEar.withLock({ $0 }) {
+            eligible.insert(dominant)
+        }
+
+        // Merge with the last-known cache. For eligible joints: fresh writes through
+        // to the cache, cached-but-not-fresh renders stale. For non-eligible joints
+        // (far-side ear, and both ears pre-calibration): never cached, never stale —
+        // present only when fresh.
+        return lastKnownKeypoints.withLock { cache in
+            var result: [VNHumanBodyPoseObservation.JointName: Keypoint] = [:]
+            for joint in Self.trackedJoints {
+                let isEligible = eligible.contains(joint)
+                if let pt = fresh[joint] {
+                    if isEligible { cache[joint] = pt }
+                    result[joint] = Keypoint(location: pt, isStale: false)
+                } else if isEligible, let pt = cache[joint] {
+                    result[joint] = Keypoint(location: pt, isStale: true)
+                }
+            }
+            return result
+        }
     }
 
     // Converts face landmark region points (which are in bbox-local normalized coords)

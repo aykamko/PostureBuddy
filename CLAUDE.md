@@ -11,12 +11,21 @@ iOS app that monitors sitting posture in real time using the front camera. The u
 
 ### Scoring: 3-position calibration + head-yaw-aware classification
 - 2D pose can't separate "bad posture" from "weird camera angle" or "head turned". Rotating your head ~30° toward the screen shifts the ear's 2D position enough to tank the score even with perfect torso posture.
-- Solution: guided calibration at **three head positions** — middle, left, right edge of screen. Each baseline captures `earShoulderAngle`, `shoulderHipAngle?`, and a raw `YawTelemetry` (bundle of candidate yaw features). At the end of calibration we pick the two features that best separate the three positions (see below).
+- Solution: guided calibration at **three head positions** — middle, left, right edge of screen — plus a fourth "lean forward" capture at the middle yaw (used only to derive `forwardSign`, see Asymmetric scoring). Each yaw baseline captures `earShoulderAngle` and a raw `YawTelemetry` (bundle of candidate yaw features). At the end of calibration we pick the two features that best separate the three yaw positions (see below).
 - At runtime: the current frame's telemetry is projected into the selected feature pair (with EMA smoothing, see below), producing a `YawSignature`. That's matched to the **nearest** baseline by 2D Euclidean distance and scored against that baseline's angles. Scoring pauses only when there's no signature at all (no face detected, or the selected features aren't populated in the frame). The `classificationThreshold` still exists inside `YawCalibration` and is shown in frame logs as a `✓/✗` confidence indicator, but it **no longer gates scoring** — hard slouching pitches the head enough to drag the signature outside any baseline's tight threshold, and blocking scoring in exactly that case defeats the whole point. All three baselines are calibrated upright, so even a "wrong nearest" baseline produces a large ear-shoulder deviation when the user slouches, and the score correctly drops.
-- Side-profile scoring uses **same-side joints** (ear→shoulder→hip). Centerline joints (nose, neck, root) are anatomically offset from the visible shoulder and produce non-zero angles even in perfect posture, so they're not used for the score itself.
-- Hip often isn't visible (desk occludes it); scoring falls back to ear-shoulder alone when that's the case.
-- **Asymmetric scoring (forward-only penalty).** `angleFromVertical` returns a *signed* angle (drop-in replaced the old `abs(dx)` formulation), so ear-shoulder and shoulder-hip angles now live in [-90°, +90°] with sign indicating which side of vertical the line tips toward. At calibration, we capture a "lean forward briefly" sample at the middle yaw (see Guided calibration flow), compute `forwardSign = sign(forwardLean.earShoulderAngle − middle.earShoulderAngle)`, and stash it on `PostureBaselines`. At scoring time, `PostureAnalyzer.forwardDeviation(current, baseline, sign)` computes `max(0, (current − baseline) × sign)` — positive only in the forward direction, zero for backward lean. If the user's lean sample wasn't decisive (|Δ| < 1°), `forwardSign` is nil and scoring falls back to the old symmetric `abs(current − baseline)` behavior. Net effect: leaning back into your chair doesn't ding the score; slouching forward does.
-- **Brief classification pauses don't disturb downstream timers.** `ContentView.onChange` drops nil scores before forwarding to `PostureSoundCoach` / `NotificationManager`, so a single flickered frame can't cancel an in-flight slouch/recovery timer or reset the 30 s alert countdown. Long-horizon resets still happen via `pauseCapture` (scene phase change) and `calibration.start` — those call `reset()` / `update(score: nil)` explicitly. Without this filter the slouch and recovery sounds were effectively never firing because every ~200 ms pause interrupted them.
+- Side-profile scoring uses **same-side ear + shoulder**. Hip was dropped entirely — the desk consistently occluded it in the target setup, and a partially-available signal was making scoring less reliable, not more. The skeleton rendering was likewise trimmed to upper-body-only (nose, eyes, ears, neck, shoulders); arms, hips, legs, and root aren't extracted or drawn.
+- **Last-known keypoint fallback**: `PoseEstimator` caches the most recent confident location for **always-eligible joints** (`nose`, `leftEye`, `rightEye`, `neck`, `leftShoulder`, `rightShoulder`), plus — post-calibration — the **dominant ear** (the camera-side one). Frames that briefly drop one of these fall back to the cached location; `Keypoint.isStale = true` makes the overlay render those dots/connections **purple** (distinct from the grade-colored fresh skeleton and cyan face landmarks).
+  - **Dominant-ear derivation**: `PoseEstimator` maintains running `earSightings` counters for left and right ears. At `calibrate()` commit, whichever side has more sightings is locked in as `dominantEar` and becomes stale-eligible. Both counters reset on `resetCalibration()`, so recalibrating after flipping the phone to the other side of the desk picks the new dominant ear correctly.
+  - **Far-side ear is never stale-cached** because it can flicker in briefly at extreme head yaws and then look like a ghost after the user's head turns back. If the non-dominant ear is fresh this frame it still renders (white), it just never gets remembered.
+  - **Pre-calibration**: neither ear is stale-eligible (dominantEar is nil), so ears only render when freshly detected.
+  - Cache survives scene-phase changes; the first fresh frame after a gap overwrites it.
+- **Asymmetric scoring (forward-only penalty).** `angleFromVertical` returns a *signed* angle (drop-in replaced the old `abs(dx)` formulation), so the ear-shoulder angle now lives in [-90°, +90°] with sign indicating which side of vertical the line tips toward. At calibration, we capture a "lean forward briefly" sample at the middle yaw (see Guided calibration flow), compute `forwardSign = sign(forwardLean.earShoulderAngle − middle.earShoulderAngle)`, and stash it on `PostureBaselines`. At scoring time, `PostureAnalyzer.forwardDeviation(current, baseline, sign)` computes `max(0, (current − baseline) × sign)` — positive only in the forward direction, zero for backward lean. If the user's lean sample wasn't decisive (|Δ| < 1°), `forwardSign` is nil and scoring falls back to the old symmetric `abs(current − baseline)` behavior. Net effect: leaning back into your chair doesn't ding the score; slouching forward does.
+- **Brief classification pauses don't disturb downstream timers.** `ContentView.onChange` drops nil scores before forwarding to `PostureSoundCoach` / `NotificationManager`, so a single flickered frame can't cancel an in-flight slouch/recovery timer or reset the alert countdown. Long-horizon resets still happen via `pauseCapture` (scene phase change) and `calibration.start` — those call `reset()` / `update(score: nil)` explicitly. Without this filter the slouch and recovery sounds were effectively never firing because every ~200 ms pause interrupted them.
+- **Tunable timing constants** (currently set for active testing — bump back up before shipping):
+  - `NotificationManager.alertDelay = 10s` (system-notification trigger after sustained poor posture; production target ~30s)
+  - `PostureSoundCoach.slouchDelay = 6s`, `recoveryDelay = 3s` (audible coach cues for sustained fair/poor and good-after-alert states)
+  - `PostureAnalyzer.maxDeviation = 20°` (degrees of deviation that drive the score to 0)
+  - `PostureScore.init` grade thresholds: good ≥ 75, fair 60–75, poor < 60
 
 ### Head-yaw classification: adaptive 2-feature selection
 Yaw in our side-profile setup isn't one-dimensional. A single scalar (any direction *or* frontality measure alone) collapses at least one pair of positions — e.g. "middle" and "left" often share the same median-line offset, while "middle" and "right" share the same face-contour width. Which failure mode hits depends on the camera angle + the user's anatomy, so we pick the feature pair adaptively instead of hardcoding one.
@@ -34,7 +43,7 @@ Yaw in our side-profile setup isn't one-dimensional. A single scalar (any direct
 - Runs alongside `VNDetectHumanBodyPoseRequest` per frame. Face landmarks drive every direction candidate and most frontality candidates; body-pose observations only contribute the (mostly dead) ear-confidence ratio. All candidates are packed into a `YawTelemetry` in `PoseEstimator.captureOutput`.
 - **Do NOT use `VNFaceObservation.yaw` directly.** Despite Apple's docs claiming revision 3+ gives continuous values, in practice `yaw` is still quantized to 45° buckets (-π/4, -π/2, etc.) for side-profile faces on iOS 26. Observed: "middle" and "right" calibration positions both returned exactly -0.785 rad (-45°), making them indistinguishable. The quantization makes `yaw` unusable for 3-position classification.
 - Revision is still set to `currentRevision` for landmark detection itself; we just don't read the `yaw` property anymore.
-- Face landmarks are also rendered on the overlay as **cyan** dots + bounding box for debugging — distinguishable from the white body keypoints. See `PostureOverlayView.swift`.
+- Face landmarks are also rendered on the overlay as **cyan** dots + bounding box for debugging — distinguishable from the white body keypoints (and from purple stale-keypoint markers). See `PostureOverlayView.swift`.
 - Landmark points are in `VNFaceLandmarkRegion2D.normalizedPoints`, which are *bounding-box-local* (0-1 within the face rect). `extractFaceLandmarks(from:)` converts them to image-normalized coords so they share the skeleton's coordinate system (needed for drawing, not for yaw features which use bbox-local coords directly).
 
 ### Guided calibration flow
@@ -44,10 +53,11 @@ Owned by `CalibrationController` (a `@MainActor` `ObservableObject`). The contro
   1. Reset: discard existing baselines (`poseEstimator.resetCalibration()`), cancel slouch/recovery timers (`soundCoach.reset()`), and clear the pending-alert banner (`notificationManager.update(score: nil)`). This stops scoring + any in-flight coaching sounds so they can't fire mid-calibration. Consequence: cancelling calibration leaves the app uncalibrated — there's no "restore previous baselines" path.
   2. Audio pipeline prime (1s silent buffer) + "Get ready…" spinner
   3. Voice: *"Let's calibrate. Please sit up straight."*
-  4. For middle / left / right:
-     - Voice: *"First, look at the middle of your screen."* → *"Next, look at the left of your screen."* → *"Last, look at the right of your screen."*
+  4. Four capture positions in order: **middle** (`look_middle.aiff`) → **leanForward** (no recorded voice yet — uses `SoundEffects.playSlouch()` as a stub audio cue; on-screen says "Now lean forward") → **left** (`look_left.aiff`; on-screen "Sit up straight, then look left") → **right** (`look_right.aiff`). Each position runs:
+     - Voice prompt (or stub sound for leanForward)
      - 3-beat marimba countdown (3, 2, 1) with tick + capture sounds
-     - **Burst-sample** 16 frames over ~2 s after count=1, then take the componentwise median (`PostureAngles.median(of:)`, which medians each `YawTelemetry` field independently). Single-frame capture was unreliable — jittery features like `contourSpreadOverH` frequently spiked high for one frame, placing the baseline outside the user's steady-state distribution and causing runtime frames to fall outside the classification threshold. Require ≥10 successful samples or the flow aborts with *"Couldn't detect your pose."*
+     - **Burst-sample** 10 frames over ~1.25 s after count=1, then take the componentwise median (`PostureAngles.median(of:)`, which medians each `YawTelemetry` field independently). Single-frame capture was unreliable — jittery features like `contourSpreadOverH` frequently spiked high for one frame, placing the baseline outside the user's steady-state distribution and causing runtime frames to fall outside the classification threshold. Require ≥6 successful samples or the flow aborts with *"Couldn't detect your pose."*
+     - The middle and leanForward captures together feed the `forwardSign` derivation (see Asymmetric scoring); middle/left/right feed `YawCalibration` for yaw classification. The leanForward sample is *only* used for the sign — it isn't a yaw baseline.
   5. Voice: *"Calibration is complete."*
 - Cancel button (the calibrate button goes red during calibration) calls `calibration.cancel()` — cancels the controller's task, stops voice, reverts UI. Baselines remain discarded (reset at step 1); user must re-run calibration before scoring resumes.
 - If `snapshotCurrentAngles()` returns nil at any capture moment (no valid pose), the flow aborts with *"Couldn't detect your pose. Please try again."*
@@ -82,6 +92,14 @@ Workflow:
 - Reset path: when `isCalibrated` goes false (user taps Recalibrate), the preview is re-added to the hierarchy immediately and the dimmer fades off over 1 s so you can see yourself during the new calibration flow. Scene-phase changes (background/foreground) do **not** touch the fade state — returning from background on a calibrated session keeps the preview hidden.
 - The dimmer sits between the camera preview and the skeleton layer in the `ZStack`, so slouching feedback stays crisp on top of a plain black background.
 
+### Watch companion (haptic feedback)
+- Separate watchOS target: **`Posture Buddy Watch Watch App`** (Xcode-generated name with the doubled "Watch"). Three files: `Posture_Buddy_WatchApp.swift` (`@main`), `ContentView.swift` (status view), `WatchPostureReceiver.swift` (`WCSession` delegate + haptic playback).
+- iOS sends events via **`WatchBridge.shared.notify(_: Event)`** — a `WCSession` singleton that fires `sendMessage` (live-only, drops if watch unreachable). Two events: **`.slouch`** (from `PostureSoundCoach` when the slouch sound plays after sustained fair/poor) and **`.recovery`** (when the recovery sound plays after sustained good post-alert). The 30 s system notification path *intentionally does not* fire a separate watch event — it would arrive ~4 s after `.slouch` for the same condition and just feel like a double-buzz.
+- The `WCSession` is activated in `Posture_BuddyApp.task` via `_ = WatchBridge.shared`. iOS-side delegate methods + reachability changes are logged under `[Watch]`.
+- Watch side: `WatchPostureReceiver` plays `WKInterfaceDevice.current().play(.notification)` for slouch and `.success` for recovery; updates `lastEvent` for the status view.
+- **Limitation we accepted**: `sendMessage` only delivers when the watch app is reachable (foreground or recently backgrounded). After a long wrist-down period the watch app is suspended and events are dropped — visible in the iOS log as `[Watch] skip slouch — watch not reachable`. Reliable always-on delivery would require an `HKWorkoutSession` extended-runtime path, deferred until the dropped-event rate becomes a real problem.
+- We also briefly explored Apple's **notification-mirroring** path (Option A: rely on iOS local notifications mirroring to the watch). That doesn't work for us because the iPhone is foreground-active during a session (`isIdleTimerDisabled = true`), so iOS routes notifications to the phone and skips the mirror. WatchBridge is the workaround.
+
 ### Orientation: portrait + portrait-upside-down
 - Supported orientations (Info.plist-equivalent in `project.pbxproj`): `UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown`.
 - **iOS's native portrait-upside-down rotation is unreliable on iPhone.** Setting the `AppDelegate` `supportedInterfaceOrientationsFor:` returning both doesn't actually rotate the UI.
@@ -93,7 +111,7 @@ Workflow:
 ### Concurrency: MainActor default isolation
 - Project uses `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` — every class, struct, and extension is implicitly `@MainActor`.
 - `AVCaptureVideoDataOutputSampleBufferDelegate.captureOutput` MUST be marked `nonisolated` or frames get dispatched to main, defeating the background video queue and blocking the UI.
-- Shared background state (orientation, last-processed-time, smoothed score, current angles, baseline) is protected with `OSAllocatedUnfairLock`.
+- Shared background state (orientation, last-processed-time, smoothed score, smoothed yaw signature, last-known keypoints cache, current angles, current telemetry, baselines, log-throttle stamps + state) is protected with `OSAllocatedUnfairLock`.
 - Static `let` constants used from `nonisolated` methods must be explicitly `nonisolated static let`.
 - **Types used from `captureOutput` must opt out of MainActor too.** `PostureAnalyzer`, `YawSignature`, and `YawTelemetry` are declared `nonisolated struct` so all their methods are callable on the video queue without per-method annotations. Same goes for extension methods intended for background use (e.g. the `OSAllocatedUnfairLock.shouldFire` throttle helper in `PoseEstimator.swift` is `nonisolated`).
 
@@ -115,24 +133,27 @@ Workflow:
 ## File Layout
 
 ```
-Posture Buddy/
-├── Posture_BuddyApp.swift              App entry. Creates NotificationManager, configures audio session
-├── ContentView.swift                   Orchestration shell: camera lifecycle, scene phase, layout (~185 lines)
-├── CameraManager.swift                 AVCaptureSession owner (front camera, no audio session touch)
+Posture Buddy/                          (iOS target)
+├── Posture_BuddyApp.swift              App entry. Creates NotificationManager, primes WatchBridge, configures audio session
+├── ContentView.swift                   Orchestration shell: camera lifecycle, scene phase, layout, post-calibration video fade
+├── CameraManager.swift                 AVCaptureSession owner (front camera, YUV420, no audio session touch)
 ├── CameraPreviewView.swift             UIViewRepresentable wrapping AVCaptureVideoPreviewLayer
-├── PoseEstimator.swift                 Runs VNDetectHumanBodyPoseRequest on videoQueue; publishes DetectedPose
-├── PostureAnalyzer.swift               Pure math: picks best side, computes angles, scores vs baseline
-├── PostureModels.swift                 Data types: DetectedPose, FaceLandmarks, PostureScore/Grade,
+├── PoseEstimator.swift                 Runs VNDetectHumanBodyPoseRequest on videoQueue; caches last-known keypoints; publishes DetectedPose
+├── PostureAnalyzer.swift               Pure math: picks best side (ear+shoulder), computes signed ear-shoulder angle, asymmetric scoring vs baseline
+├── PostureModels.swift                 Data types: DetectedPose, Keypoint, FaceLandmarks, PostureScore/Grade,
 │                                       PostureAngles, YawTelemetry, YawSignature, DirectionFeature,
-│                                       FrontalityFeature, YawSelection, YawCalibration, PostureBaselines
+│                                       FrontalityFeature, YawSelection, YawCalibration, PostureBaselines (incl. forwardLean + forwardSign)
 ├── PostureGrade+UI.swift               SwiftUI-bridge: PostureScore.Grade.swiftUIColor
-├── PostureOverlayView.swift            SwiftUI Canvas drawing skeleton + face landmarks
-├── CalibrationController.swift         @MainActor ObservableObject driving the guided-calibration flow
+├── PostureOverlayView.swift            SwiftUI Canvas drawing skeleton + face landmarks (white=fresh, purple=stale, cyan=face)
+├── CalibrationController.swift         @MainActor ObservableObject driving the 4-position guided-calibration flow
 ├── UIDeviceOrientation+Vision.swift    .visionOrientation mapping for front-camera buffers
-├── NotificationManager.swift           Tracks poor-posture duration; fires haptic + local notification
-├── PostureSoundCoach.swift             Short-horizon (5s) grade-transition sounds
+├── NotificationManager.swift           Tracks poor-posture duration; fires haptic + local notification + WatchBridge slouch event
+├── PostureSoundCoach.swift             Sustained-state grade-transition sounds (slouch=6s, recovery=3s); also fires WatchBridge events
 ├── VoiceGuide.swift                    Plays bundled .aiff prompts via AVAudioPlayer; keyed by VoicePrompt enum
 ├── SoundEffects.swift                  Synthesized marimba tones + beep pairs
+├── WatchBridge.swift                   WCSession singleton; sends `.slouch` / `.recovery` haptic events to paired watch
+├── Log.swift                           Timestamped print helper (HH:mm:ss.SSS); thread-safe DateFormatter under OSAllocatedUnfairLock
+├── SandboxDiagnostics.swift            Launch-time per-directory size dump (debug; catches unexpected disk growth)
 ├── Views/                              Leaf SwiftUI views composed by ContentView
 │   ├── ScoreHUDView.swift              108pt circle, color-coded score
 │   ├── CalibrateButton.swift           Capsule button, flips to red "Cancel" while calibrating
@@ -146,38 +167,46 @@ Posture Buddy/
     ├── look_right.aiff
     ├── calibration_complete.aiff
     └── pose_not_detected.aiff
+    (no lean_forward clip yet — calibration step uses `SoundEffects.playSlouch()` as a stub)
+
+Posture Buddy Watch Watch App/          (watchOS target — Xcode-named with the doubled "Watch")
+├── Posture_Buddy_WatchApp.swift        @main App entry; owns WatchPostureReceiver as @StateObject
+├── ContentView.swift                   Minimal status view — shows last-received event tag
+└── WatchPostureReceiver.swift          WCSession delegate; plays WKInterfaceDevice haptics on incoming `slouch`/`recovery` events
 ```
 
 ## Data Flow
 
 ```
-AVCaptureSession (front camera, BGRA)
+AVCaptureSession (front camera, YUV 420 BiPlanar)
     │  CMSampleBuffer on videoQueue
     ▼
 PoseEstimator.captureOutput (nonisolated, 10 FPS throttled)
-    │  VNDetectHumanBodyPoseRequest → VNHumanBodyPoseObservation (body keypoints + ear confidences)
+    │  VNDetectHumanBodyPoseRequest → VNHumanBodyPoseObservation (body keypoints)
     │  VNDetectFaceLandmarksRequest → VNFaceObservation (face landmarks, ignore .yaw)
     │  → YawTelemetry(all candidate direction + frontality features)
+    │  → smoothed YawSignature (EMA α=0.3 in PoseEstimator)
     │  PostureAnalyzer.computeAngles(observation, yawTelemetry:) → PostureAngles
-    │  PostureAnalyzer.score(current, baselines) → (PostureScore, position)?
-    │    (projects telemetry via baselines.yaw.selection, classifies nearest baseline
-    │     within baselines.yaw.classificationThreshold; nil otherwise)
-    │  exponential smoothing (0.8*prev + 0.2*new)
-    ▼  Task { @MainActor } publishes DetectedPose (keypoints + faceLandmarks + score)
+    │  PostureAnalyzer.score(current, baselines, yawSignature:) → (PostureScore, position)?
+    │    classifies the *nearest* baseline (no threshold gating); applies forwardSign
+    │    asymmetric scoring; returns nil only if no signature available.
+    │  exponential smoothing on score (0.8*prev + 0.2*new)
+    ▼  Task { @MainActor } publishes DetectedPose (keypoints w/ isStale + faceLandmarks + score)
 ContentView
-    ├── CameraPreviewView        (bottom layer, not rotated)
-    ├── PostureOverlayView       (Canvas, rotated with UI — body in white, face landmarks in cyan)
+    ├── CameraPreviewView        (bottom layer, not rotated; faded out + removed 3 s after calibration)
+    ├── PostureOverlayView       (Canvas, rotated with UI — fresh white, stale purple, face cyan)
     ├── ScoreHUDView             (108pt circle, color-coded score)
     ├── CalibrateButton / TrackingLoadingView / GuidedCalibrationOverlay / AlertOverlay
-    └── NotificationManager.update + PostureSoundCoach.update (only after calibration)
+    └── onChange(score) → NotificationManager.update + PostureSoundCoach.update (skips nil scores)
+                          → on alert / slouch / recovery: WatchBridge.shared.notify(...)
 ```
 
 ## Permissions & Build Settings
 
 - **`INFOPLIST_KEY_NSCameraUsageDescription`** is set in both Debug and Release in `project.pbxproj`.
 - **`INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown"`**.
-- **Bundle ID**: `akamko.Posture-Buddy`. Team: `ZC95DNC67Z`.
-- **Deployment target**: iOS 26.4.
+- **Bundle IDs**: iOS app `akamko.Posture-Buddy`; watch app `akamko.Posture-Buddy.watchkitapp` (`INFOPLIST_KEY_WKCompanionAppBundleIdentifier` on the watch target points back at the iOS app). Team: `ZC95DNC67Z`.
+- **Deployment targets**: iOS 26.4, watchOS 26.4.
 
 ## Dev Workflow
 

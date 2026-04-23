@@ -4,9 +4,18 @@ import Vision
 // MARK: - Pose frame data
 
 struct DetectedPose {
-    let keypoints: [VNHumanBodyPoseObservation.JointName: CGPoint]
+    let keypoints: [VNHumanBodyPoseObservation.JointName: Keypoint]
     let faceLandmarks: FaceLandmarks?  // nil if no face detected
     let score: PostureScore?           // nil until user calibrates
+}
+
+/// 2D keypoint with a freshness flag. `isStale == true` means the live frame didn't
+/// contain this joint at sufficient confidence and we're falling back to the last
+/// known position from a recent frame. Surfaced visually so the user can tell when
+/// the overlay is partially extrapolated.
+struct Keypoint {
+    let location: CGPoint
+    let isStale: Bool
 }
 
 // Face landmarks in Vision's image-normalized coordinates (0-1, y-up from bottom).
@@ -54,11 +63,12 @@ struct PostureScore {
 
 // MARK: - Angles and baselines
 
-// A snapshot of the side-profile angles + raw yaw telemetry for one frame.
+// A snapshot of the side-profile angle + raw yaw telemetry for one frame.
 // Baseline = same struct captured during calibration at one head position.
+// Hip/shoulder-hip angle was dropped — the desk consistently occluded the hip in
+// this camera setup, so scoring it made the app less reliable, not more.
 struct PostureAngles {
     let earShoulderAngle: Float       // degrees from image-vertical
-    let shoulderHipAngle: Float?      // nil if hip was occluded
     // Raw candidate features for yaw classification. Nil if face wasn't detected.
     // The analyzer projects this into a `YawSignature` at scoring time using the
     // feature pair chosen during calibration (see YawCalibration).
@@ -334,14 +344,9 @@ extension PostureAngles {
     static func median(of samples: [PostureAngles]) -> PostureAngles? {
         guard !samples.isEmpty else { return nil }
         let ear = Self.median(samples.map { $0.earShoulderAngle })!
-        // Keep the hip only if the majority of samples had a visible hip — otherwise
-        // it's not reliable enough to score against.
-        let hips = samples.compactMap { $0.shoulderHipAngle }
-        let hip = hips.count * 2 >= samples.count ? Self.median(hips) : nil
         let telemetries = samples.compactMap { $0.yawTelemetry }
         return PostureAngles(
             earShoulderAngle: ear,
-            shoulderHipAngle: hip,
             yawTelemetry: telemetries.isEmpty ? nil : YawTelemetry.median(of: telemetries)
         )
     }
