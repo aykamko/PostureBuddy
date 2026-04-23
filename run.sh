@@ -3,6 +3,13 @@
 # Uses xcodebuild + xcrun devicectl so we don't depend on Xcode's GUI state or
 # keyboard-send Cmd+R. Prereq: iPhone plugged in via USB, Developer Mode on,
 # and Mac trusted by the phone. Xcode does not need to be open.
+#
+# Usage: ./run.sh [debug|release] [--logs]
+#   debug:   -O0, full symbols, asserts on — fast to build, slower runtime (default)
+#   release: -O, stripped symbols, asserts off — production perf + battery
+#   --logs:  attach to the launched app's stdout/stderr (incl. our [Posture] /
+#            [Coach] / [Watch] log lines), tee them to build/latest.log, and
+#            block until Ctrl+C. Without this flag, launch returns immediately.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -10,8 +17,23 @@ cd "$(dirname "$0")"
 PROJECT="Posture Buddy.xcodeproj"
 SCHEME="Posture Buddy"
 BUNDLE_ID="akamko.Posture-Buddy"
-CONFIGURATION="Debug"
 DERIVED="build"
+
+# --- 0. Parse args (config positional + --logs flag, in any order) ---
+WITH_LOGS=0
+CONFIGURATION="Debug"
+for arg in "$@"; do
+    case "$arg" in
+        debug|Debug)     CONFIGURATION="Debug" ;;
+        release|Release) CONFIGURATION="Release" ;;
+        --logs|-l)       WITH_LOGS=1 ;;
+        *)
+            echo "usage: $0 [debug|release] [--logs]" >&2
+            exit 2
+            ;;
+    esac
+done
+echo "→ config: $CONFIGURATION"
 
 # --- 1. Find a connected iPhone ---
 # `xcrun devicectl list devices` output is fixed-column; the row for a physical
@@ -73,7 +95,17 @@ APP="$DERIVED/Build/Products/${CONFIGURATION}-iphoneos/${SCHEME}.app"
 echo "→ installing…"
 xcrun devicectl device install app --device "$DEVICE_ID" "$APP" >/dev/null
 
-echo "→ launching…"
-xcrun devicectl device process launch --device "$DEVICE_ID" "$BUNDLE_ID" >/dev/null
-
-echo "✓ launched $BUNDLE_ID"
+if [ "$WITH_LOGS" = "1" ]; then
+    LOG_FILE="$DERIVED/latest.log"
+    echo "→ launching with --console; teeing to $LOG_FILE (Ctrl+C to detach)"
+    # `--console` connects the app's stdout/stderr to ours and blocks until the
+    # process exits. Pipe through tee so logs go to both terminal and file.
+    xcrun devicectl device process launch \
+        --console \
+        --device "$DEVICE_ID" \
+        "$BUNDLE_ID" 2>&1 | tee "$LOG_FILE"
+else
+    echo "→ launching…"
+    xcrun devicectl device process launch --device "$DEVICE_ID" "$BUNDLE_ID" >/dev/null
+    echo "✓ launched $BUNDLE_ID"
+fi

@@ -212,7 +212,7 @@ ContentView
 
 - **Default end-of-change loop** (Claude should do this after every meaningful code change, not just when asked):
   1. Run `BuildProject` via the Xcode MCP — structured error output.
-  2. If the build succeeds, run `./run.sh` from the project root — builds with `xcodebuild` for the connected iPhone's specific device ID, then installs + launches via `xcrun devicectl`.
+  2. If the build succeeds, run `./run.sh` from the project root — builds with `xcodebuild` for the connected iPhone's specific device ID, then installs + launches via `xcrun devicectl`. Defaults to Debug; pass `release` (`./run.sh release`) for production-optimized builds when you want to dogfood the app with realistic battery + perf.
   3. If the build fails, fix the errors and repeat; don't call `run.sh` on a broken build.
 - `run.sh` is fully GUI-independent — no Xcode window / scheme / destination state matters. Prereqs: iPhone plugged in via USB, Developer Mode on, Mac trusted by the phone. Xcode does not need to be open.
 - The `Failed to load provisioning paramter list … Error Code=1002` output from `devicectl` is a harmless warning that accompanies every `devicectl` invocation on this machine (including plain `list devices`) — ignore it, not a real failure.
