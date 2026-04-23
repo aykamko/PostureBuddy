@@ -212,9 +212,11 @@ ContentView
 
 - **Default end-of-change loop** (Claude should do this after every meaningful code change, not just when asked):
   1. Run `BuildProject` via the Xcode MCP — structured error output.
-  2. If the build succeeds, run `./run.sh` from the project root — builds with `xcodebuild` for the connected iPhone's specific device ID, then installs + launches via `xcrun devicectl`. Defaults to Debug; pass `release` (`./run.sh release`) for production-optimized builds when you want to dogfood the app with realistic battery + perf.
+  2. If the build succeeds, run **`./run.sh --logs --bg`** from the project root. This builds with `xcodebuild` for the connected iPhone's specific device ID, installs via `xcrun devicectl`, then launches the app with `--console` attached in the background and streams its stdout/stderr to `build/latest.log`. The script returns immediately so you can keep working; tail logs live with `tail -f build/latest.log` if you want to watch.
   3. If the build fails, fix the errors and repeat; don't call `run.sh` on a broken build.
+- `run.sh` flags: `[debug|release]` (default debug; `release` swaps to optimized prod build for realistic battery / perf), `--logs` (foreground tee to terminal *and* `build/latest.log`, blocks until Ctrl+C), `--bg` (background, file-only). `--logs --bg` together resolves to `--bg` semantics (you can't tee to a nonexistent terminal).
 - `run.sh` is fully GUI-independent — no Xcode window / scheme / destination state matters. Prereqs: iPhone plugged in via USB, Developer Mode on, Mac trusted by the phone. Xcode does not need to be open.
+- To stop a backgrounded session: the script prints the devicectl PID at launch (`kill $PID`), or `pkill -f "devicectl device process launch"` to clean up all of them.
 - The `Failed to load provisioning paramter list … Error Code=1002` output from `devicectl` is a harmless warning that accompanies every `devicectl` invocation on this machine (including plain `list devices`) — ignore it, not a real failure.
 - Must test on a **physical device** — the Simulator has no camera.
 - **SourceKit diagnostics frequently show stale false positives** (e.g., "No such module 'UIKit'", "'AVAudioSession' is unavailable in macOS", "Cannot find type X"). If `BuildProject` returns success, the build is good — ignore stale SourceKit errors.

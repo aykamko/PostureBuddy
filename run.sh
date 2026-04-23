@@ -4,12 +4,14 @@
 # keyboard-send Cmd+R. Prereq: iPhone plugged in via USB, Developer Mode on,
 # and Mac trusted by the phone. Xcode does not need to be open.
 #
-# Usage: ./run.sh [debug|release] [--logs]
+# Usage: ./run.sh [debug|release] [--logs|--bg]
 #   debug:   -O0, full symbols, asserts on — fast to build, slower runtime (default)
 #   release: -O, stripped symbols, asserts off — production perf + battery
-#   --logs:  attach to the launched app's stdout/stderr (incl. our [Posture] /
-#            [Coach] / [Watch] log lines), tee them to build/latest.log, and
-#            block until Ctrl+C. Without this flag, launch returns immediately.
+#   --logs:  foreground attach to the launched app's stdout/stderr, tee to
+#            build/latest.log; blocks until Ctrl+C.
+#   --bg:    background-attach the same console stream; logs to build/latest.log
+#            only (no terminal output), returns immediately. Use `tail -f
+#            build/latest.log` to watch live, or just inspect after the session.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -19,16 +21,18 @@ SCHEME="Posture Buddy"
 BUNDLE_ID="akamko.Posture-Buddy"
 DERIVED="build"
 
-# --- 0. Parse args (config positional + --logs flag, in any order) ---
+# --- 0. Parse args (config positional + --logs/--bg flag, in any order) ---
 WITH_LOGS=0
+WITH_BG=0
 CONFIGURATION="Debug"
 for arg in "$@"; do
     case "$arg" in
         debug|Debug)     CONFIGURATION="Debug" ;;
         release|Release) CONFIGURATION="Release" ;;
         --logs|-l)       WITH_LOGS=1 ;;
+        --bg|-b)         WITH_BG=1 ;;
         *)
-            echo "usage: $0 [debug|release] [--logs]" >&2
+            echo "usage: $0 [debug|release] [--logs|--bg]" >&2
             exit 2
             ;;
     esac
@@ -95,8 +99,21 @@ APP="$DERIVED/Build/Products/${CONFIGURATION}-iphoneos/${SCHEME}.app"
 echo "→ installing…"
 xcrun devicectl device install app --device "$DEVICE_ID" "$APP" >/dev/null
 
-if [ "$WITH_LOGS" = "1" ]; then
-    LOG_FILE="$DERIVED/latest.log"
+LOG_FILE="$DERIVED/latest.log"
+if [ "$WITH_BG" = "1" ]; then
+    # Background mode: nohup + & + disown so the console-attach survives this
+    # script exiting and any terminal close. Logs go straight to the file (no
+    # tee — there's no foreground terminal to write to).  `--logs` + `--bg`
+    # together resolves here too, since you can't tee to a nonexistent term.
+    echo "→ launching backgrounded; logs → $LOG_FILE"
+    nohup xcrun devicectl device process launch \
+        --console \
+        --device "$DEVICE_ID" \
+        "$BUNDLE_ID" > "$LOG_FILE" 2>&1 &
+    BG_PID=$!
+    disown
+    echo "✓ launched (devicectl pid $BG_PID); kill it with: kill $BG_PID"
+elif [ "$WITH_LOGS" = "1" ]; then
     echo "→ launching with --console; teeing to $LOG_FILE (Ctrl+C to detach)"
     # `--console` connects the app's stdout/stderr to ours and blocks until the
     # process exits. Pipe through tee so logs go to both terminal and file.
