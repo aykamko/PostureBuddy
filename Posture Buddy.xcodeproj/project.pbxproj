@@ -228,7 +228,7 @@
 				DEVELOPMENT_TEAM = ZC95DNC67Z;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "Posture Buddy";
+				INFOPLIST_KEY_CFBundleDisplayName = "Posture Buddy Watch App";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = "akamko.Posture-Buddy";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -261,7 +261,7 @@
 				DEVELOPMENT_TEAM = ZC95DNC67Z;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "Posture Buddy";
+				INFOPLIST_KEY_CFBundleDisplayName = "Posture Buddy Watch App";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = "akamko.Posture-Buddy";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -415,6 +415,7 @@
 				DEVELOPMENT_TEAM = ZC95DNC67Z;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Posture Buddy";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Posture Buddy uses the camera to analyze your sitting posture in real time.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -452,6 +453,7 @@
 				DEVELOPMENT_TEAM = ZC95DNC67Z;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Posture Buddy";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Posture Buddy uses the camera to analyze your sitting posture in real time.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
