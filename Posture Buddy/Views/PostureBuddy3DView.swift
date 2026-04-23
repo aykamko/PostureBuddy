@@ -17,13 +17,38 @@ struct PostureBuddy3DView: UIViewRepresentable {
     let score: PostureScore?
     let dominantEar: EarSide?
 
+    // Debug transform overrides — active only when `debugEnabled` is true
+    // (`Hide UI` mode in ContentView). Let us rotate / translate / scale the
+    // model via on-screen knobs + drag + pinch gestures without perturbing
+    // the default score-driven visual.
+    var debugEnabled: Bool = false
+    var yawDeg: Double = 0
+    var pitchDeg: Double = 0
+    var rollDeg: Double = 0
+    var scale: Double = 1.0
+    var translation: CGSize = .zero
+    /// Show the debug bone markers (small bright spheres at each joint).
+    /// Default off — they're mostly a rig-diagnosis tool.
+    var showBones: Bool = false
+
+    /// Container's base (mirror-off) scale factor. Referenced by the debug
+    /// transform path so "scale × 1.0" matches normal framing. Tuned for the
+    /// current `stickman.usdz` export (bounds ~1.8w × 2.3h × 1.2d pre-scale).
+    private static let baseScale: Float = 0.7
+
+    /// Model-space units per point of drag translation. Tuned so drag follows
+    /// the finger at roughly 1:1 on-screen when the figure is centered.
+    private static let translationScale: Float = 0.004
+
     func makeUIView(context: Context) -> SCNView {
         let view = SCNView()
         view.backgroundColor = .clear
         view.isOpaque = false
         view.antialiasingMode = .multisampling4X
-        view.isUserInteractionEnabled = false
         view.autoenablesDefaultLighting = false
+        // Custom gestures are handled at the SwiftUI layer; SceneKit's built-in
+        // camera control would fight them.
+        view.allowsCameraControl = false
         // SceneKit only needs to redraw when we mutate state; no per-frame animation.
         view.rendersContinuously = false
 
@@ -36,37 +61,60 @@ struct PostureBuddy3DView: UIViewRepresentable {
     }
 
     func updateUIView(_ view: SCNView, context: Context) {
-        let leanDeg = Self.leanDegrees(for: score)
-        let leanRad = Float(leanDeg) * .pi / 180
+        // Diagnostic phase: let the imported animation loop naturally (set in
+        // cacheDriveNodes). If the buddy slouches/unslouches on a cycle we
+        // know the export/import path is good and can switch back to
+        // score-driven sceneTime scrubbing.
+        view.rendersContinuously = true
 
+        // Toggle debug bone markers. The helper walks the tree once per
+        // update; cheap enough at 30 or so markers and avoids caching state
+        // across re-created Coordinators.
+        if let root = view.scene?.rootNode {
+            Self.setBoneMarkersHidden(on: root, hidden: !showBones)
+        }
+
+        // Mirror + debug transform: instant. The mirror flip is visually snappy
+        // (CLAUDE.md: "instant flip, otherwise the mirror crossfade is
+        // unsightly"), and the debug knobs need 1:1 follow-the-finger feel.
         SCNTransaction.begin()
-        SCNTransaction.animationDuration = 0.4
-        SCNTransaction.animationTimingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-
-        // Head pitch. The `axis` here is along the bone's local X; if the figure
-        // pitches sideways instead of forward, we adjust to [0,1,0] or [0,0,1]
-        // after eyeballing on device.
-        if let head = context.coordinator.headNode {
-            let delta = simd_quatf(angle: leanRad, axis: [1, 0, 0])
-            head.simdOrientation = context.coordinator.headRest * delta
-        }
-
-        // Mirror — flip around the rig's up axis based on dominantEar.
-        // `.left` triggers the flip, matching the empirically-confirmed 2D mapping.
+        SCNTransaction.animationDuration = 0
         if let flipNode = context.coordinator.flipNode {
-            let angle: Float = dominantEar == .left ? .pi : 0
-            let rot = simd_quatf(angle: angle, axis: [0, 1, 0])  // SceneKit is Y-up after USD import
-            flipNode.simdOrientation = context.coordinator.flipRest * rot
-        }
+            let mirrorAngle: Float = dominantEar == .left ? .pi : 0
+            let mirrorRot = simd_quatf(angle: mirrorAngle, axis: [0, 1, 0])
 
+            if debugEnabled {
+                let yaw = Float(yawDeg) * .pi / 180
+                let pitch = Float(pitchDeg) * .pi / 180
+                let roll = Float(rollDeg) * .pi / 180
+                // Yaw × pitch × roll in YXZ order, applied outside mirror so
+                // dragging "yaw right" reads as right-handed for both
+                // non-mirrored and mirrored (ear-flipped) figures.
+                let debugRot = simd_quatf(angle: yaw,   axis: [0, 1, 0])
+                             * simd_quatf(angle: pitch, axis: [1, 0, 0])
+                             * simd_quatf(angle: roll,  axis: [0, 0, 1])
+                flipNode.simdOrientation = context.coordinator.flipRest * debugRot * mirrorRot
+                flipNode.simdPosition = SIMD3(
+                    Float(translation.width)  *  Self.translationScale,
+                    Float(translation.height) * -Self.translationScale,
+                    0
+                )
+                flipNode.simdScale = SIMD3(repeating: Self.baseScale * Float(scale))
+            } else {
+                flipNode.simdOrientation = context.coordinator.flipRest * mirrorRot
+                flipNode.simdPosition = SIMD3<Float>(0, 0, 0)
+                flipNode.simdScale = SIMD3(repeating: Self.baseScale)
+            }
+        }
         SCNTransaction.commit()
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     final class Coordinator {
-        var headNode: SCNNode?
-        var headRest = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+        /// Longest duration across all skeletal animations found at load time.
+        /// sceneTime ∈ [0, animationDuration] scrubs the slouch clip.
+        var animationDuration: TimeInterval = 0
         /// The scene-tree ancestor we rotate 180° around when mirroring.
         var flipNode: SCNNode?
         var flipRest = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
@@ -103,28 +151,34 @@ struct PostureBuddy3DView: UIViewRepresentable {
         // Model is ~8.9 units tall; scale to a manageable size.
         container.simdScale = SIMD3(repeating: 0.15)
 
-        // Pose arms down from T-pose to a relaxed side-hanging pose. The rig
-        // shares one skeleton across all skinned meshes, so rotating the upper-
-        // arm bones (`Arm_L_1`, `Arm_R_1` under the Spine_4 chain) deforms the
-        // bound arm spheres via SCNSkinner. ~70° around the Z axis brings the
-        // arms from horizontal to roughly along the torso.
-        poseArmsDown(in: scene.rootNode)
+        // The new model is already exported in a seated pose (Blender-baked
+        // rest pose, see tools/stickman/export_v2.py), so no runtime posing
+        // here. Model extends Y ∈ [-0.75, 1.59]; center of mass sits around
+        // y ≈ 0.42. Keep axisFix at origin — camera look-at aims at body center.
+        axisFix.simdPosition = SIMD3<Float>(0, 0, 0)
+
+        // Debug: attach a bright marker at every bone origin so we can see the
+        // skeleton regardless of mesh occlusion. Remove once the pose + camera
+        // + axes are dialed in.
+        highlightBones(in: scene.rootNode)
+        addLimbTipMarkers(in: scene.rootNode)
 
         // Log post-setup bounds so we know what we're framing.
         let (minB, maxB) = container.boundingBox
         Log.line("[Buddy3D]", String(format: "container bounds: min=(%.2f,%.2f,%.2f) max=(%.2f,%.2f,%.2f)",
             minB.x, minB.y, minB.z, maxB.x, maxB.y, maxB.z))
 
-        // Camera — side view at the figure's right, framed around torso height.
-        // Pulled back so the full body fits comfortably; slight elevation so
-        // we're looking down at the head's forward-lean arc rather than up.
+        // Camera — side view framed on the seated figure. Scaled model is
+        // ~1.64m tall, ~1.27m wide, center-Y ≈ 0.3 world units. Camera 2.5m
+        // off in +X with a 45° vertical FOV gives a full-body side profile
+        // with margin on top + bottom.
         let cam = SCNNode()
         cam.camera = SCNCamera()
         cam.camera?.fieldOfView = 45
         cam.camera?.zNear = 0.1
         cam.camera?.zFar = 50
-        cam.simdPosition = SIMD3(2.5, 0.8, 0)
-        cam.simdLook(at: SIMD3(0, 0.7, 0), up: SIMD3(0, 1, 0), localFront: SIMD3(0, 0, -1))
+        cam.simdPosition = SIMD3(2.5, 0.3, 0)
+        cam.simdLook(at: SIMD3(0, 0.3, 0.1), up: SIMD3(0, 1, 0), localFront: SIMD3(0, 0, -1))
         scene.rootNode.addChildNode(cam)
 
         // Lighting: soft ambient + one directional for mild shading.
@@ -144,29 +198,49 @@ struct PostureBuddy3DView: UIViewRepresentable {
         return scene
     }
 
-    /// Walk the imported scene tree to find the node we rotate to drive the head
-    /// lean and the node we rotate 180° around Y to mirror. The rig has two
-    /// nodes named "Head": a deep bone (`Armature_001/Root/Spine_1/.../Spine_4/Head`)
-    /// with no mesh, and a shallow `Armature/Head` that parents the visible
-    /// sphere mesh. If skinning is present we prefer the bone (deforms the mesh
-    /// via SCNSkinner); otherwise we target the mesh parent directly (rigid
-    /// sub-mesh transform).
+    /// Wire up the buddyContainer for mirror/scale/debug. Also inventory all
+    /// skeletal animations so we can log duration for debugging. For now we
+    /// let each animation play naturally (no scene-time scrub) — once we
+    /// confirm the imported animation actually deforms the mesh correctly on
+    /// a loop, we'll switch back to sceneTime scrubbing by score.
     private static func cacheDriveNodes(scene: SCNScene, into coord: Coordinator) {
-        let hasSkinning = firstSkinner(in: scene.rootNode) != nil
-        let head: SCNNode? = hasSkinning
-            ? scene.rootNode.childNode(withName: "Head", recursively: true)
-            : firstHeadWithMeshChild(in: scene.rootNode)
-
-        if let head {
-            coord.headNode = head
-            coord.headRest = head.simdOrientation
-            Log.line("[Buddy3D]", "head drive node: \(head.name ?? "?") (skinning=\(hasSkinning))")
-        } else {
-            Log.line("[Buddy3D]", "WARN: head drive node not found; head won't animate")
-        }
         if let container = scene.rootNode.childNode(withName: "buddyContainer", recursively: false) {
             coord.flipNode = container
             coord.flipRest = container.simdOrientation
+        }
+        var longest: TimeInterval = 0
+        var count = 0
+        inventoryAnimations(on: scene.rootNode, longest: &longest, count: &count)
+        coord.animationDuration = longest
+        Log.line("[Buddy3D]",
+            "animations found: \(count)  longest duration: \(String(format: "%.3f", longest))s")
+    }
+
+    /// Recursively hide / show any node we added during bone-marker setup
+    /// (prefixes `_boneMarker_` and `_tipMarker_`).
+    private static func setBoneMarkersHidden(on node: SCNNode, hidden: Bool) {
+        if let name = node.name,
+           name.hasPrefix("_boneMarker_") || name.hasPrefix("_tipMarker_") {
+            node.isHidden = hidden
+        }
+        for c in node.childNodes {
+            setBoneMarkersHidden(on: c, hidden: hidden)
+        }
+    }
+
+    private static func inventoryAnimations(on node: SCNNode, longest: inout TimeInterval, count: inout Int) {
+        for key in node.animationKeys {
+            if let player = node.animationPlayer(forKey: key) {
+                count += 1
+                longest = max(longest, player.animation.duration)
+                // Loop so the diagnostic playback keeps cycling.
+                player.animation.repeatCount = .greatestFiniteMagnitude
+                player.animation.autoreverses = true
+                player.play()
+            }
+        }
+        for c in node.childNodes {
+            inventoryAnimations(on: c, longest: &longest, count: &count)
         }
     }
 
@@ -178,37 +252,101 @@ struct PostureBuddy3DView: UIViewRepresentable {
         return nil
     }
 
-    /// Rotate the upper-arm bones from T-pose down toward the torso. The arms
-    /// are bones named `Arm_L_1` / `Arm_R_1` nested under the `Spine_4` chain
-    /// (not the shallow same-named mesh parents). We find them by path through
-    /// the deep bone hierarchy.
-    private static func poseArmsDown(in root: SCNNode) {
-        guard let spine4 = root.childNode(withName: "Spine_4", recursively: true) else {
-            Log.line("[Buddy3D]", "WARN: Spine_4 not found; arms stay in T-pose")
+    /// Attach a bright emissive sphere at every skeleton bone's origin so the
+    /// rig is visible through the mesh. Uses `SCNSkinner.bones` (30 bones
+    /// confirmed via startup log) as the authoritative list instead of walking
+    /// the hierarchy by name. Constant lighting model so markers pop even in
+    /// dim scenes. Color-coded by chain via a simple name-prefix check to make
+    /// screenshots easier to reason about:
+    ///   - Spine_* + Head → magenta  (the chain we rotate for forward-head)
+    ///   - Leg_*           → cyan    (hip + knee for sitting)
+    ///   - Arm_* / Elbow   → yellow
+    ///   - Hand / Foot     → green
+    ///   - everything else → white
+    private static func highlightBones(in root: SCNNode) {
+        guard let skinner = firstSkinner(in: root) else {
+            Log.line("[Buddy3D]", "WARN: no skinner found; skipping bone highlight")
             return
         }
-        // The bones' local axes come from Blender — rotating ~±70° around Z
-        // brings the arm from horizontal to roughly alongside the torso.
-        let down: Float = 70 * .pi / 180
-        if let armL = spine4.childNode(withName: "Arm_L_1", recursively: false) {
-            armL.simdOrientation = armL.simdOrientation * simd_quatf(angle: -down, axis: [0, 0, 1])
-        }
-        if let armR = spine4.childNode(withName: "Arm_R_1", recursively: false) {
-            armR.simdOrientation = armR.simdOrientation * simd_quatf(angle: down, axis: [0, 0, 1])
+        let shown = skinner.bones.filter { shouldHighlight($0.name ?? "") }
+        Log.line("[Buddy3D]", "highlighting \(shown.count)/\(skinner.bones.count) bones")
+        for bone in shown {
+            let marker = SCNNode()
+            marker.name = "_boneMarker_\(bone.name ?? "?")"
+            marker.geometry = SCNSphere(radius: 0.05)
+            let mat = SCNMaterial()
+            mat.lightingModel = .constant
+            let color = boneMarkerColor(for: bone.name ?? "")
+            mat.diffuse.contents = color
+            mat.emission.contents = color
+            // Draw through the mesh: disable depth test + put markers after
+            // the skin in the render order so they always appear on top.
+            mat.readsFromDepthBuffer = false
+            mat.writesToDepthBuffer = false
+            marker.geometry?.firstMaterial = mat
+            marker.renderingOrder = 100
+            bone.addChildNode(marker)
         }
     }
 
-    private static func firstHeadWithMeshChild(in root: SCNNode) -> SCNNode? {
-        if root.name == "Head" && root.childNodes.contains(where: { $0.geometry != nil }) {
-            return root
+    /// Show primary joints only. Each limb is split into 5 bendy-bone
+    /// subdivisions (`_002…_005`); we show just `_002` (the limb root) so each
+    /// joint reads as one marker rather than a cluster of four. The spine
+    /// chain keeps all `Spine_B_*` segments so we can see the slouch arc.
+    private static func shouldHighlight(_ name: String) -> Bool {
+        if name.contains("_Bend") { return false }
+        let isLimbSegment = name.hasPrefix("UpperArm") || name.hasPrefix("LowerArm")
+                         || name.hasPrefix("UpperLeg") || name.hasPrefix("LowerLeg")
+        if isLimbSegment {
+            if name.hasSuffix("_003") || name.hasSuffix("_004") || name.hasSuffix("_005") {
+                return false
+            }
         }
-        for c in root.childNodes {
-            if let m = firstHeadWithMeshChild(in: c) { return m }
-        }
-        return nil
+        return true
     }
 
-    /// One-time dump of the imported scene's node hierarchy — helpful for
+    /// Attach markers at the tip of each forearm and shin so we can eyeball
+    /// wrist / ankle positions. Blender bones have local +Y as the tail
+    /// direction, so an offset of `(0, boneLen, 0)` in the bone's frame lands
+    /// at the tip. Lengths are first-pass guesses for this model (~8.9 units
+    /// tall, Blender default proportions) — iterate if they land off-body.
+    private static func addLimbTipMarkers(in root: SCNNode) {
+        guard let skinner = firstSkinner(in: root) else { return }
+        // Bendy-bone subdivision: each limb is split into 5 segments, with
+        // `_005` being the tip-most one. Marker at a small +Y offset from the
+        // tip bone's origin lands near the wrist / ankle.
+        let tips: [(bone: String, length: Float)] = [
+            ("LowerArm_L_005", 0.15),
+            ("LowerArm_R_005", 0.15),
+            ("LowerLeg_L_005", 0.15),
+            ("LowerLeg_R_005", 0.15),
+        ]
+        for t in tips {
+            guard let bone = skinner.bones.first(where: { $0.name == t.bone }) else { continue }
+            let marker = SCNNode()
+            marker.name = "_tipMarker_\(t.bone)"
+            marker.simdPosition = SIMD3(0, t.length, 0)
+            marker.geometry = SCNSphere(radius: 0.05)
+            let mat = SCNMaterial()
+            mat.lightingModel = .constant
+            mat.diffuse.contents = UIColor.green
+            mat.emission.contents = UIColor.green
+            mat.readsFromDepthBuffer = false
+            mat.writesToDepthBuffer = false
+            marker.geometry?.firstMaterial = mat
+            marker.renderingOrder = 100
+            bone.addChildNode(marker)
+        }
+    }
+
+    private static func boneMarkerColor(for name: String) -> UIColor {
+        if name == "Head" || name.hasPrefix("Spine") { return .systemPink }
+        if name.contains("Leg") { return .cyan }
+        if name.contains("Arm") { return .yellow }
+        return .white
+    }
+
+/// One-time dump of the imported scene's node hierarchy — helpful for
     /// debugging bone-name mismatches on first bring-up. Disable once we trust
     /// the rig.
     private static var didDumpHierarchy = false
@@ -231,19 +369,18 @@ struct PostureBuddy3DView: UIViewRepresentable {
         walk(scene.rootNode, depth: 0)
     }
 
-    // MARK: - Score → degrees
+    // MARK: - Score → slouch ratio
 
-    /// Linear ramp: nil/score ≥ 90 → 0°, ≤ 30 → 35°, linear in between.
-    /// Matches the 2D PostureBuddyView exactly — same transfer function so the
-    /// user-visible lean magnitude doesn't change when they compare the views.
-    static func leanDegrees(for score: PostureScore?) -> Double {
+    /// Linear ramp from "upright" to "fully slouched", matching the transfer
+    /// function the 2D view used for head pitch. Nil / score ≥ 90 → 0 (t=0 of
+    /// the Blender clip, upright); score ≤ 30 → 1 (t=50, fully slouched);
+    /// linear in between.
+    static func slouchRatio(for score: PostureScore?) -> Double {
         guard let value = score?.value else { return 0 }
         let upright: Float = 90
         let floor: Float = 30
-        let maxLean: Double = 35
         if value >= upright { return 0 }
-        if value <= floor { return maxLean }
-        let t = Double((upright - value) / (upright - floor))
-        return t * maxLean
+        if value <= floor { return 1 }
+        return Double((upright - value) / (upright - floor))
     }
 }

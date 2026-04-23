@@ -38,6 +38,28 @@ struct ContentView: View {
     /// (false, default) and the live skeleton overlay (true, debug).
     @State private var showDebugOverlay: Bool = false
 
+    /// Hide every UI chrome element (HUD, buttons, camera preview, overlays)
+    /// to inspect just the 3D rig. Bottom-left toggle; useful for camera /
+    /// pose / bone diagnosis via finger-orbit on the SCNView.
+    @State private var hideUI: Bool = false
+
+    /// Show the debug bone markers overlaid on the 3D mascot. Off by default
+    /// now that the rig is working — kept behind a toggle for future rig
+    /// debugging.
+    @State private var showBones: Bool = false
+
+    // Debug transform state driven by AxisKnob + pan/pinch gestures when
+    // `hideUI` is on. `PostureBuddy3DView` only applies these when
+    // `debugEnabled` is true, so toggling `hideUI` off snaps the model back
+    // to its normal position without losing the values.
+    @State private var modelYaw: Double = 0
+    @State private var modelPitch: Double = 0
+    @State private var modelRoll: Double = 0
+    @State private var modelScale: Double = 1.0
+    @State private var modelScaleAtStart: Double = 1.0
+    @State private var modelOffset: CGSize = .zero
+    @State private var modelOffsetAtStart: CGSize = .zero
+
     private let trackingTimeoutSeconds: Double = 45
     private let videoFadeStartDelay: Duration = .seconds(3)
     private let videoFadeDuration: Double = 1.0
@@ -110,18 +132,21 @@ struct ContentView: View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            if !videoHidden {
+            if !videoHidden && !hideUI {
                 CameraPreviewView(session: cameraManager.session)
                     .ignoresSafeArea()
             }
 
             // Black dimmer between the camera preview and the skeleton. Animated via
             // the body-level `.animation(value: videoFadeOpacity)` modifier, so we
-            // just set the target opacity from the fade Task.
-            Color.black
-                .opacity(videoFadeOpacity)
-                .ignoresSafeArea()
-                .allowsHitTesting(false)
+            // just set the target opacity from the fade Task. Suppressed in Hide-UI
+            // mode — the root Color.black already gives us a plain backdrop.
+            if !hideUI {
+                Color.black
+                    .opacity(videoFadeOpacity)
+                    .ignoresSafeArea()
+                    .allowsHitTesting(false)
+            }
 
             // Default visual is the Posture Buddy mascot; Debug toggle (under
             // CalibrateButton) swaps it for the raw skeleton overlay.
@@ -132,12 +157,22 @@ struct ContentView: View {
             } else {
                 PostureBuddy3DView(
                     score: poseEstimator.currentPose?.score,
-                    dominantEar: poseEstimator.dominantEar
+                    dominantEar: poseEstimator.dominantEar,
+                    debugEnabled: hideUI,
+                    yawDeg: modelYaw,
+                    pitchDeg: modelPitch,
+                    rollDeg: modelRoll,
+                    scale: modelScale,
+                    translation: modelOffset,
+                    showBones: showBones
                 )
                 .ignoresSafeArea()
                 .rotatedIfUpsideDown(isUpsideDown)
+                .gesture(modelDragGesture, including: hideUI ? .gesture : .none)
+                .simultaneousGesture(modelPinchGesture, including: hideUI ? .gesture : .none)
             }
 
+            if !hideUI {
             VStack {
                 HStack {
                     ScoreHUDView(score: poseEstimator.currentPose?.score,
@@ -194,22 +229,33 @@ struct ContentView: View {
                 // (so the prop / bezel doesn't occlude either button).
                 .padding(.bottom, 12)
 
-                // Debug toggle — outside the `isTrackingReady` Group so it's
-                // always available (useful for previewing the figure even before
-                // pose tracking has warmed up).
-                Button { showDebugOverlay.toggle() } label: {
-                    Text(showDebugOverlay ? "Hide Debug" : "Debug")
-                        .font(.footnote.weight(.medium))
-                        .foregroundStyle(.white.opacity(0.7))
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 8)
-                        .background(Capsule().stroke(.white.opacity(0.4), lineWidth: 1))
+                // Debug toggles — outside the `isTrackingReady` Group so
+                // they're always available (useful for previewing the figure
+                // before pose tracking has warmed up).
+                HStack(spacing: 10) {
+                    Button { showDebugOverlay.toggle() } label: {
+                        Text(showDebugOverlay ? "Hide Debug" : "Debug")
+                            .font(.footnote.weight(.medium))
+                            .foregroundStyle(.white.opacity(0.7))
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .background(Capsule().stroke(.white.opacity(0.4), lineWidth: 1))
+                    }
+                    Button { showBones.toggle() } label: {
+                        Text(showBones ? "Hide Bones" : "Bones")
+                            .font(.footnote.weight(.medium))
+                            .foregroundStyle(.white.opacity(0.7))
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .background(Capsule().stroke(.white.opacity(0.4), lineWidth: 1))
+                    }
                 }
                 .padding(.bottom, 100)
             }
             .rotatedIfUpsideDown(isUpsideDown)
+            }
 
-            if calibration.isActive {
+            if calibration.isActive && !hideUI {
                 GuidedCalibrationOverlay(
                     instruction: calibration.instruction,
                     countdown: calibration.countdown
@@ -219,7 +265,7 @@ struct ContentView: View {
                 .transition(.opacity)
             }
 
-            if showTrackingFailedAlert {
+            if showTrackingFailedAlert && !hideUI {
                 AlertOverlay(
                     title: "Pose Tracking Unavailable",
                     message: "Apple's pose-detection model couldn't load on this device. Try:\n\n• Free up storage space on your iPhone\n• Force-quit and relaunch Posture Buddy\n• Restart your iPhone",
@@ -230,7 +276,80 @@ struct ContentView: View {
                 .rotatedIfUpsideDown(isUpsideDown)
                 .transition(.opacity)
             }
+
+            // Always-visible Hide/Show UI toggle. Stays on top so we can get
+            // the chrome back when we're done inspecting the rig.
+            VStack {
+                Spacer()
+                HStack {
+                    Button { hideUI.toggle() } label: {
+                        Text(hideUI ? "Show UI" : "Hide UI")
+                            .font(.footnote.weight(.medium))
+                            .foregroundStyle(.white.opacity(0.7))
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .background(Capsule().fill(.black.opacity(0.4)))
+                            .overlay(Capsule().stroke(.white.opacity(0.4), lineWidth: 1))
+                    }
+                    .padding(.leading, 20)
+                    .padding(.bottom, 100)
+                    Spacer()
+                }
+            }
+            .rotatedIfUpsideDown(isUpsideDown)
+
+            // Debug axis knobs shown in Hide-UI mode. Press-and-drag each knob
+            // vertically to spin that axis; Reset zeroes all five transforms.
+            if hideUI {
+                VStack {
+                    Spacer()
+                    HStack(spacing: 14) {
+                        Spacer()
+                        AxisKnob(label: "Y", value: $modelYaw,   accent: .cyan)
+                        AxisKnob(label: "P", value: $modelPitch, accent: .yellow)
+                        AxisKnob(label: "R", value: $modelRoll,  accent: .pink)
+                        Button {
+                            modelYaw = 0; modelPitch = 0; modelRoll = 0
+                            modelScale = 1.0; modelScaleAtStart = 1.0
+                            modelOffset = .zero; modelOffsetAtStart = .zero
+                        } label: {
+                            Text("Reset")
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(.white.opacity(0.85))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                                .background(Capsule().fill(.black.opacity(0.55)))
+                                .overlay(Capsule().stroke(.white.opacity(0.35), lineWidth: 1))
+                        }
+                        .padding(.trailing, 20)
+                    }
+                    .padding(.bottom, 100)
+                }
+                .rotatedIfUpsideDown(isUpsideDown)
+            }
         }
+    }
+
+    /// One-finger drag on the 3D view translates the model in screen X/Y while
+    /// `hideUI` is on. Captures the offset at drag-start so repeated strokes
+    /// accumulate instead of snapping back.
+    private var modelDragGesture: some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { g in
+                modelOffset = CGSize(
+                    width:  modelOffsetAtStart.width  + g.translation.width,
+                    height: modelOffsetAtStart.height + g.translation.height
+                )
+            }
+            .onEnded { _ in modelOffsetAtStart = modelOffset }
+    }
+
+    /// Pinch-to-scale the model while `hideUI` is on. Multiplied against the
+    /// start value for continuous scaling across multiple pinches.
+    private var modelPinchGesture: some Gesture {
+        MagnificationGesture()
+            .onChanged { m in modelScale = max(0.2, modelScaleAtStart * m) }
+            .onEnded   { _ in modelScaleAtStart = modelScale }
     }
 
     /// `true` once the fade-to-black has passed its midpoint or the preview has
