@@ -130,7 +130,7 @@ struct ContentView: View {
                     .ignoresSafeArea()
                     .rotatedIfUpsideDown(isUpsideDown)
             } else {
-                PostureBuddyView(
+                PostureBuddy3DView(
                     score: poseEstimator.currentPose?.score,
                     dominantEar: poseEstimator.dominantEar
                 )
