@@ -306,7 +306,7 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
             Log.line(
                 "[Posture]",
                 "score=\(String(format: "%.1f", score.value)) [\(score.grade.label)] "
-                + "mode=\(position.rawValue)  yaw=\(yawStr)  cls=\(clsStr)"
+                + "mode=\(position.shortLabel)  yaw=\(yawStr)  cls=\(clsStr)"
             )
         case .paused:
             Log.line(

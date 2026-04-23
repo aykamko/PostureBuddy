@@ -16,6 +16,12 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
+# Clean up any leftover backgrounded devicectl from previous `--bg` runs so an
+# old console-attach doesn't keep writing into build/latest.log alongside the
+# new launch (or hold the device console busy). pkill returns nonzero when no
+# match → swallow with `|| true` so set -e doesn't bail.
+pkill -f "devicectl device process launch" 2>/dev/null && echo "→ killed stale backgrounded devicectl" || true
+
 PROJECT="Posture Buddy.xcodeproj"
 SCHEME="Posture Buddy"
 BUNDLE_ID="akamko.Posture-Buddy"

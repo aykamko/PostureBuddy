@@ -332,6 +332,15 @@ struct PostureBaselines {
 
 enum CalibrationPosition: String {
     case middle, left, right
+
+    /// Two-char tag used in per-frame logs to keep them scannable at a glance.
+    var shortLabel: String {
+        switch self {
+        case .middle: return "md"
+        case .left:   return "lf"
+        case .right:  return "rt"
+        }
+    }
 }
 
 // MARK: - Median helpers
