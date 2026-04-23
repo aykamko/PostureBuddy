@@ -10,8 +10,7 @@ nonisolated struct PostureAnalyzer {
 
     func computeAngles(
         _ observation: VNHumanBodyPoseObservation,
-        yawTelemetry: YawTelemetry?,
-        keypoints3D: [VNHumanBodyPoseObservation.JointName: Keypoint3D]? = nil
+        yawTelemetry: YawTelemetry?
     ) -> PostureAngles? {
         guard let allPoints = try? observation.recognizedPoints(.all),
               let side = pickBestSide(allPoints)
@@ -20,20 +19,10 @@ nonisolated struct PostureAnalyzer {
         let earShoulder = angleFromVertical(from: side.ear, to: side.shoulder)
         let shoulderHip = side.hip.map { angleFromVertical(from: side.shoulder, to: $0) }
 
-        // Pull depths for the *same* side the 2D angles used, so 2D and 3D
-        // references to "the ear-shoulder vector" always refer to the same joints.
-        let earZ = keypoints3D?[side.earName]?.depthMeters
-        let shoulderZ = keypoints3D?[side.shoulderName]?.depthMeters
-        let neckZ = keypoints3D?[.neck]?.depthMeters
-        let earShoulderZDelta: Float? = (earZ != nil && shoulderZ != nil) ? earZ! - shoulderZ! : nil
-        let earNeckZDelta: Float? = (earZ != nil && neckZ != nil) ? earZ! - neckZ! : nil
-
         return PostureAngles(
             earShoulderAngle: earShoulder,
             shoulderHipAngle: shoulderHip,
-            yawTelemetry: yawTelemetry,
-            earShoulderZDelta: earShoulderZDelta,
-            earNeckZDelta: earNeckZDelta
+            yawTelemetry: yawTelemetry
         )
     }
 
@@ -90,17 +79,9 @@ nonisolated struct PostureAnalyzer {
         return max(0, signed * sign)                  // forward only; backward = 0
     }
 
-    private struct PickedSide {
-        let earName: VNHumanBodyPoseObservation.JointName
-        let shoulderName: VNHumanBodyPoseObservation.JointName
-        let ear: CGPoint
-        let shoulder: CGPoint
-        let hip: CGPoint?
-    }
-
     private func pickBestSide(
         _ points: [VNHumanBodyPoseObservation.JointName: VNRecognizedPoint]
-    ) -> PickedSide? {
+    ) -> (ear: CGPoint, shoulder: CGPoint, hip: CGPoint?)? {
         let sides: [(ear: VNHumanBodyPoseObservation.JointName,
                      shoulder: VNHumanBodyPoseObservation.JointName,
                      hip: VNHumanBodyPoseObservation.JointName)] = [
@@ -108,7 +89,7 @@ nonisolated struct PostureAnalyzer {
             (.rightEar, .rightShoulder, .rightHip)
         ]
 
-        var best: PickedSide? = nil
+        var best: (ear: CGPoint, shoulder: CGPoint, hip: CGPoint?)? = nil
         var bestConfidence: Float = 0
 
         for side in sides {
@@ -125,13 +106,7 @@ nonisolated struct PostureAnalyzer {
 
             if total > bestConfidence {
                 bestConfidence = total
-                best = PickedSide(
-                    earName: side.ear,
-                    shoulderName: side.shoulder,
-                    ear: earPt.location,
-                    shoulder: shoulderPt.location,
-                    hip: validHip?.location
-                )
+                best = (earPt.location, shoulderPt.location, validHip?.location)
             }
         }
         return best

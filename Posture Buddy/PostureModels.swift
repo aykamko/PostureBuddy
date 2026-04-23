@@ -4,18 +4,9 @@ import Vision
 // MARK: - Pose frame data
 
 struct DetectedPose {
-    let keypoints: [VNHumanBodyPoseObservation.JointName: Keypoint3D]
+    let keypoints: [VNHumanBodyPoseObservation.JointName: CGPoint]
     let faceLandmarks: FaceLandmarks?  // nil if no face detected
     let score: PostureScore?           // nil until user calibrates
-}
-
-/// Per-keypoint 2D image-normalized location + optional metric depth from the
-/// TrueDepth IR camera. `depthMeters` is nil when the depth map had a hole at
-/// that pixel (dark hair/clothing, edges, out-of-range) or when depth isn't
-/// being captured (e.g. TrueDepth unavailable, Phase 0 stub).
-struct Keypoint3D {
-    let location: CGPoint
-    let depthMeters: Float?
 }
 
 // Face landmarks in Vision's image-normalized coordinates (0-1, y-up from bottom).
@@ -72,11 +63,6 @@ struct PostureAngles {
     // The analyzer projects this into a `YawSignature` at scoring time using the
     // feature pair chosen during calibration (see YawCalibration).
     let yawTelemetry: YawTelemetry?
-    // TrueDepth-derived candidate metrics (meters). Nil when depth not available
-    // (wide-angle fallback) or when the relevant keypoint's depth sample was a hole.
-    // Computed per frame, medianed across the calibration burst.
-    let earShoulderZDelta: Float?     // ear.Z − shoulder.Z
-    let earNeckZDelta: Float?         // ear.Z − neck.Z
 }
 
 // A 2D point in the feature space chosen by calibration. Comparable across frames
@@ -353,14 +339,10 @@ extension PostureAngles {
         let hips = samples.compactMap { $0.shoulderHipAngle }
         let hip = hips.count * 2 >= samples.count ? Self.median(hips) : nil
         let telemetries = samples.compactMap { $0.yawTelemetry }
-        let earSh = Self.median(samples.compactMap { $0.earShoulderZDelta })
-        let earNk = Self.median(samples.compactMap { $0.earNeckZDelta })
         return PostureAngles(
             earShoulderAngle: ear,
             shoulderHipAngle: hip,
-            yawTelemetry: telemetries.isEmpty ? nil : YawTelemetry.median(of: telemetries),
-            earShoulderZDelta: earSh,
-            earNeckZDelta: earNk
+            yawTelemetry: telemetries.isEmpty ? nil : YawTelemetry.median(of: telemetries)
         )
     }
 

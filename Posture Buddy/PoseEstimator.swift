@@ -14,13 +14,10 @@ private extension OSAllocatedUnfairLock where State == CFTimeInterval {
     }
 }
 
-final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureDataOutputSynchronizerDelegate {
+final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     @Published var currentPose: DetectedPose?
     @Published var isCalibrated: Bool = false
     @Published var isTrackingReady: Bool = false
-    /// Latest TrueDepth map rendered as a jet-colormap CGImage for debug overlay.
-    /// nil when running on wide-angle fallback (no depth) or before the first frame.
-    @Published var depthVisualization: CGImage?
 
     nonisolated private let analyzer = PostureAnalyzer()
     private let lastProcessedTime = OSAllocatedUnfairLock(initialState: CFTimeInterval(0))
@@ -33,7 +30,6 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
     private let smoothedYawSignature = OSAllocatedUnfairLock<YawSignature?>(initialState: nil)
     private let visionOrientation = OSAllocatedUnfairLock(initialState: CGImagePropertyOrientation.leftMirrored)
     private let lastLogTime = OSAllocatedUnfairLock(initialState: CFTimeInterval(0))
-    private let lastDepthLogTime = OSAllocatedUnfairLock(initialState: CFTimeInterval(0))
     private let lastLogState = OSAllocatedUnfairLock<FrameLogState>(initialState: .noValidSide)
 
     // Most-recent per-frame angles (for calibration capture)
@@ -150,45 +146,10 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
         return true
     }
 
-    // MARK: - AVCaptureVideoDataOutputSampleBufferDelegate (fallback: no TrueDepth)
-
     nonisolated func captureOutput(
         _ output: AVCaptureOutput,
         didOutput sampleBuffer: CMSampleBuffer,
         from connection: AVCaptureConnection
-    ) {
-        processFrame(sampleBuffer: sampleBuffer, depthData: nil)
-    }
-
-    // MARK: - AVCaptureDataOutputSynchronizerDelegate (preferred: video + depth)
-
-    nonisolated func dataOutputSynchronizer(
-        _ synchronizer: AVCaptureDataOutputSynchronizer,
-        didOutput synchronizedDataCollection: AVCaptureSynchronizedDataCollection
-    ) {
-        // Pull the video+depth pair out of the collection. Iteration yields the
-        // `AVCaptureSynchronizedData` entries directly (no output-keyed lookup needed).
-        var video: AVCaptureSynchronizedSampleBufferData?
-        var depth: AVCaptureSynchronizedDepthData?
-        for entry in synchronizedDataCollection {
-            if let v = entry as? AVCaptureSynchronizedSampleBufferData {
-                video = v
-            } else if let d = entry as? AVCaptureSynchronizedDepthData {
-                depth = d
-            }
-        }
-        guard let video, !video.sampleBufferWasDropped else { return }
-        // Depth can be absent (slower frame) or dropped; we still score on video alone
-        // in that case and flag the keypoints' depth as nil.
-        let usableDepth = (depth?.depthDataWasDropped == false) ? depth?.depthData : nil
-        processFrame(sampleBuffer: video.sampleBuffer, depthData: usableDepth)
-    }
-
-    // MARK: - Shared pipeline
-
-    nonisolated private func processFrame(
-        sampleBuffer: CMSampleBuffer,
-        depthData: AVDepthData?
     ) {
         let now = CACurrentMediaTime()
         guard lastProcessedTime.shouldFire(now: now, minInterval: 0.1) else { return }
@@ -198,35 +159,9 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
         // Which two we actually use for classification is decided at calibration time
         // and lives in `baselines.yaw.selection`.
         let telemetry = YawTelemetry.from(face: face, body: body)
-
-        // Prep the depth buffer once: orient to match Vision's upright space and
-        // convert to Float32 metric depth. Lock it for the duration of all consumers
-        // (keypoint sampling + viz rendering) so we only pay the lock once.
-        let orientation = visionOrientation.withLock { $0 }
-        let preparedDepth: CVPixelBuffer? = depthData
-            .map { $0.applyingExifOrientation(orientation) }
-            .map { $0.converting(toDepthDataType: kCVPixelFormatType_DepthFloat32) }
-            .map { $0.depthDataMap }
-        if let preparedDepth {
-            CVPixelBufferLockBaseAddress(preparedDepth, .readOnly)
-        }
-        defer {
-            if let preparedDepth {
-                CVPixelBufferUnlockBaseAddress(preparedDepth, .readOnly)
-            }
-        }
-
-        // Extract keypoints first (with per-keypoint depth sampled from the depth
-        // map) so the analyzer can decorate the angles with depth deltas using the
-        // exact same side it picks for the 2D angle.
-        let keypoints = extractKeypoints(from: body, preparedDepth: preparedDepth)
-        let angles = analyzer.computeAngles(body, yawTelemetry: telemetry, keypoints3D: keypoints)
+        let angles = analyzer.computeAngles(body, yawTelemetry: telemetry)
         currentAngles.withLock { $0 = angles }
         currentTelemetry.withLock { $0 = telemetry }
-
-        // Debug overlay: render the depth buffer as a jet-colormap image. ~80k
-        // pixels per frame at 10 Hz is cheap; only generate when depth is present.
-        let depthViz = preparedDepth.flatMap { Self.makeDepthVisualization(from: $0) }
 
         let currentBaselines = baselines.withLock { $0 }
 
@@ -274,21 +209,12 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
                 yaw: runtimeSig,
                 classification: classification,
                 score: scored?.score,
-                position: scored?.position,
-                angles: angles
+                position: scored?.position
             )
-        }
-        // Depth telemetry: only when this packet actually contained depth (skips
-        // the 2-of-3 video-only frames from the 30 Hz video / 10 Hz depth cadence)
-        // and throttled to 1 Hz so the log stays readable during observation.
-        if depthViz != nil,
-           let angles,
-           lastDepthLogTime.shouldFire(now: now, minInterval: 1.0) {
-            Self.logDepthTelemetry(angles: angles, currentBaselines: currentBaselines)
         }
 
         let pose = DetectedPose(
-            keypoints: keypoints,
+            keypoints: extractKeypoints(from: body),
             faceLandmarks: Self.extractFaceLandmarks(from: face),
             score: scored?.score
         )
@@ -296,12 +222,6 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
 
         Task { @MainActor in
             self.currentPose = pose
-            // Only publish *new* depth viz — depth runs at 10 Hz while video arrives
-            // at 30 Hz, so 2/3 of synchronized packets have `depthDataWasDropped` and
-            // would blank the overlay. Keep the last valid image on screen instead.
-            if let depthViz {
-                self.depthVisualization = depthViz
-            }
             if hasValidAngles && !self.isTrackingReady {
                 self.isTrackingReady = true
             }
@@ -350,76 +270,33 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
         yaw: YawSignature?,
         classification: YawClassification?,
         score: PostureScore?,
-        position: CalibrationPosition?,
-        angles: PostureAngles?
+        position: CalibrationPosition?
     ) {
         let yawStr = yaw?.debugString ?? "n/a"
         let clsStr = classification?.debugString ?? "n/a"
-        let depthStr = Self.depthSummary(angles: angles)
         switch state {
         case .scored:
             guard let score, let position else { return }
             Log.line(
                 "[Posture]",
                 "score=\(String(format: "%.1f", score.value)) [\(score.grade.label)] "
-                + "mode=\(position.rawValue)  yaw=\(yawStr)  cls=\(clsStr)  \(depthStr)"
+                + "mode=\(position.rawValue)  yaw=\(yawStr)  cls=\(clsStr)"
             )
         case .paused:
             Log.line(
                 "[Posture]",
-                "paused — head position not recognized  yaw=\(yawStr)  cls=\(clsStr)  \(depthStr)"
+                "paused — head position not recognized  yaw=\(yawStr)  cls=\(clsStr)"
             )
         case .awaitingCalibration:
-            Log.line(
-                "[Posture]",
-                "angles available; awaiting calibration  yaw=\(yawStr)  \(depthStr)"
-            )
+            Log.line("[Posture]", "angles available; awaiting calibration  yaw=\(yawStr)")
         case .noValidSide:
             Log.line("[Posture]", "no valid keypoints")
         }
     }
 
-    /// Compact summary of depth-derived metrics for inclusion in the `[Posture]` line.
-    /// `n/a` when the frame had no valid depth deltas (e.g. wide-angle fallback or holes).
-    nonisolated private static func depthSummary(angles: PostureAngles?) -> String {
-        guard let angles else { return "depth=n/a" }
-        func cm(_ m: Float?) -> String {
-            guard let m else { return "—" }
-            return String(format: "%+.2fcm", m * 100)
-        }
-        return "depth=earSh:\(cm(angles.earShoulderZDelta)) earNk:\(cm(angles.earNeckZDelta))"
-    }
-
-    /// One CSV-ish line per frame. Pull off device with Console.app and plot.
-    /// Columns: `t,earShCm,earNkCm,baseEarShCm,baseEarNkCm,position`
-    nonisolated private static func logDepthTelemetry(
-        angles: PostureAngles,
-        currentBaselines: PostureBaselines?
-    ) {
-        // Use whichever baseline is closest by yaw classification if calibrated.
-        // For simplicity in this telemetry pass we always reference the middle
-        // baseline — Phase 5 plot is per-yaw-position anyway.
-        let baseline = currentBaselines?.middle
-        func cm(_ m: Float?) -> String {
-            guard let m else { return "" }
-            return String(format: "%.3f", m * 100)
-        }
-        let line = [
-            cm(angles.earShoulderZDelta),
-            cm(angles.earNeckZDelta),
-            cm(baseline?.earShoulderZDelta),
-            cm(baseline?.earNeckZDelta)
-        ].joined(separator: ",")
-        Log.line("[DepthTelemetry]", "earShCm,earNkCm,baseEarShCm,baseEarNkCm = \(line)")
-    }
-
-    /// Caller must lock `preparedDepth` (if non-nil) before calling and unlock after —
-    /// this method does NOT manage the buffer's lock lifecycle so the same prepared
-    /// buffer can be shared with `makeDepthVisualization`.
     nonisolated private func extractKeypoints(
-        from observation: VNHumanBodyPoseObservation,
-        preparedDepth: CVPixelBuffer?
-    ) -> [VNHumanBodyPoseObservation.JointName: Keypoint3D] {
+        from observation: VNHumanBodyPoseObservation
+    ) -> [VNHumanBodyPoseObservation.JointName: CGPoint] {
         let joints: [VNHumanBodyPoseObservation.JointName] = [
             .nose, .leftEye, .rightEye,
             .leftEar, .rightEar,
@@ -432,116 +309,13 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
             .leftAnkle, .rightAnkle,
             .root
         ]
-
-        var result: [VNHumanBodyPoseObservation.JointName: Keypoint3D] = [:]
+        var result: [VNHumanBodyPoseObservation.JointName: CGPoint] = [:]
         for joint in joints {
-            guard let pt = try? observation.recognizedPoint(joint),
-                  pt.confidence >= 0.3 else { continue }
-            let depth = preparedDepth.flatMap { Self.sampleDepth(at: pt.location, buffer: $0) }
-            result[joint] = Keypoint3D(location: pt.location, depthMeters: depth)
+            if let pt = try? observation.recognizedPoint(joint), pt.confidence >= 0.3 {
+                result[joint] = pt.location
+            }
         }
         return result
-    }
-
-    /// Renders a Float32 depth buffer (already orientation-corrected, locked by the
-    /// caller) into a jet-colormap RGB image for the debug overlay. Closer = red,
-    /// farther = blue, IR holes = magenta. Range clamped to 0.25–1.0 m (TrueDepth
-    /// usable range; desk distance sits in the middle).
-    nonisolated private static func makeDepthVisualization(from buffer: CVPixelBuffer) -> CGImage? {
-        let width = CVPixelBufferGetWidth(buffer)
-        let height = CVPixelBufferGetHeight(buffer)
-        let bpr = CVPixelBufferGetBytesPerRow(buffer)
-        guard let base = CVPixelBufferGetBaseAddress(buffer) else { return nil }
-
-        let nearMeters: Float = 0.25
-        let farMeters: Float = 1.0
-        let range = farMeters - nearMeters
-
-        var pixels = [UInt8](repeating: 0, count: width * height * 4)
-        pixels.withUnsafeMutableBytes { raw in
-            let out = raw.baseAddress!.assumingMemoryBound(to: UInt8.self)
-            for y in 0..<height {
-                let row = base.advanced(by: y * bpr).assumingMemoryBound(to: Float32.self)
-                for x in 0..<width {
-                    let d = row.advanced(by: x).pointee
-                    let i = (y * width + x) * 4
-                    if !d.isFinite || d <= 0 {
-                        // IR hole — magenta, opaque
-                        out[i] = 255; out[i+1] = 0; out[i+2] = 255; out[i+3] = 255
-                    } else {
-                        let t = max(0, min(1, (d - nearMeters) / range))
-                        let (r, g, b) = jetColor(t: t)
-                        out[i] = r; out[i+1] = g; out[i+2] = b; out[i+3] = 255
-                    }
-                }
-            }
-        }
-
-        let cfData = Data(pixels) as CFData
-        guard let provider = CGDataProvider(data: cfData) else { return nil }
-        return CGImage(
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bitsPerPixel: 32,
-            bytesPerRow: width * 4,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
-            provider: provider,
-            decode: nil,
-            shouldInterpolate: true,
-            intent: .defaultIntent
-        )
-    }
-
-    /// Standard "jet" colormap: red → yellow → green → cyan → blue.
-    nonisolated private static func jetColor(t: Float) -> (UInt8, UInt8, UInt8) {
-        let t = max(0, min(1, t))
-        if t < 0.25 {
-            return (255, UInt8(t * 4 * 255), 0)
-        } else if t < 0.5 {
-            return (UInt8((1 - (t - 0.25) * 4) * 255), 255, 0)
-        } else if t < 0.75 {
-            return (0, 255, UInt8((t - 0.5) * 4 * 255))
-        } else {
-            return (0, UInt8((1 - (t - 0.75) * 4) * 255), 255)
-        }
-    }
-
-    /// Samples a 3×3 patch of Float32 depth around the given image-normalized
-    /// location and returns the median of finite positive values. `nil` when every
-    /// sample in the patch was NaN/0/negative (IR hole).
-    nonisolated private static func sampleDepth(
-        at location: CGPoint,
-        buffer: CVPixelBuffer
-    ) -> Float? {
-        let width = CVPixelBufferGetWidth(buffer)
-        let height = CVPixelBufferGetHeight(buffer)
-        // Vision: origin bottom-left, y-up, normalized. Depth buffer (after
-        // `applyingExifOrientation`): origin top-left, y-down. Flip y.
-        let cx = Int((Double(location.x) * Double(width)).rounded())
-        let cy = Int(((1.0 - Double(location.y)) * Double(height)).rounded())
-        guard let base = CVPixelBufferGetBaseAddress(buffer) else { return nil }
-        let bpr = CVPixelBufferGetBytesPerRow(buffer)
-
-        var samples: [Float] = []
-        samples.reserveCapacity(9)
-        for dy in -1...1 {
-            let py = cy + dy
-            guard py >= 0, py < height else { continue }
-            let rowStart = base.advanced(by: py * bpr).assumingMemoryBound(to: Float32.self)
-            for dx in -1...1 {
-                let px = cx + dx
-                guard px >= 0, px < width else { continue }
-                let pixel = rowStart.advanced(by: px).pointee
-                if pixel.isFinite && pixel > 0 {
-                    samples.append(pixel)
-                }
-            }
-        }
-        guard !samples.isEmpty else { return nil }
-        samples.sort()
-        return samples[samples.count / 2]
     }
 
     // Converts face landmark region points (which are in bbox-local normalized coords)
