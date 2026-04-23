@@ -62,19 +62,17 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
     }
 
     private func triggerAlert() {
-        // No phone haptic — the phone is typically propped on books/a stand and a
-        // buzz can knock it over. The system notification still posts, and the watch
-        // companion already buzzed for the same condition 4s earlier via the coach
-        // `.slouch` event, so the user is covered.
-        let content = UNMutableNotificationContent()
-        content.title = "Posture Check"
-        content.body = "You've been slouching for a while. Time to sit up straight!"
-        content.sound = .default
-        content.interruptionLevel = .timeSensitive
-
-        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
-        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: trigger)
-        UNUserNotificationCenter.current().add(request)
+        // System notification disabled for now — relying entirely on the recurring
+        // slouch sound (PostureSoundCoach) + watch haptic. Re-enable by uncommenting
+        // if banner/lock-screen alerts become useful again.
+        // let content = UNMutableNotificationContent()
+        // content.title = "Posture Check"
+        // content.body = "You've been slouching for a while. Time to sit up straight!"
+        // content.sound = .default
+        // content.interruptionLevel = .timeSensitive
+        // let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
+        // let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: trigger)
+        // UNUserNotificationCenter.current().add(request)
     }
 
     // MARK: - UNUserNotificationCenterDelegate

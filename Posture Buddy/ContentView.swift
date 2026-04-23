@@ -142,18 +142,6 @@ struct ContentView: View {
                 }
                 Spacer()
 
-                if poseEstimator.isCalibrated,
-                   calibration.countdown == nil,
-                   case .warning(let seconds) = notificationManager.alertState {
-                    Text("Poor posture — alert in \(seconds)s")
-                        .font(.caption)
-                        .foregroundStyle(.yellow)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(.black.opacity(0.5), in: Capsule())
-                        .padding(.bottom, 12)
-                }
-
                 Group {
                     if poseEstimator.isTrackingReady {
                         CalibrateButton(

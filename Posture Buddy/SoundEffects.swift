@@ -1,6 +1,18 @@
 import AVFoundation
 import Foundation
 
+/// Equal-tempered note frequencies (Hz, A4 = 440). Add cases as needed; keeping
+/// only the ones we actually use here.
+private enum Note: Float {
+    case c3 = 130.81
+    case g3 = 196.00
+    case f4 = 349.23
+    case g4 = 392.00
+    case a4 = 440.00
+    case b4 = 493.88
+    case c5 = 523.25
+}
+
 /// Plays synthesized marimba-like tones.
 /// Design notes for smooth playback:
 ///  - Tone buffers are pre-generated on a background queue at startup so playback never
@@ -22,17 +34,13 @@ final class SoundEffects {
     // Pre-generated buffers, populated asynchronously by configure()
     private var tickBuffers: [AVAudioPCMBuffer] = []
     private var captureBuffer: AVAudioPCMBuffer?
-    private var slouchBuffer: AVAudioPCMBuffer?   // descending "beep-boop" on poor posture
-    private var recoveryBuffer: AVAudioPCMBuffer? // ascending "boop-beep" on return to good posture
+    private var slouchBuffer: AVAudioPCMBuffer?         // descending "beep-boop" on poor posture (initial)
+    private var slouchReminderBuffer: AVAudioPCMBuffer? // two low C3 boops, fired every 6s while still slouching
+    private var recoveryBuffer: AVAudioPCMBuffer?       // ascending "boop-beep" on return to good posture
 
-    // Rising C major scale fragment (F, G, A, B) resolving to C5 on capture.
-    private static let tickFrequencies: [Float] = [
-        349.23, // F4
-        392.00, // G4
-        440.00, // A4
-        493.88, // B4
-    ]
-    private static let captureFrequency: Float = 523.25 // C5 (octave tonic)
+    // Rising C major scale fragment resolving to C5 on capture.
+    private static let tickNotes: [Note] = [.f4, .g4, .a4, .b4]
+    private static let captureNote: Note = .c5
 
     /// Duration of the silent prime buffer. Callers should wait at least this long
     /// after `prime()` before scheduling real tones.
@@ -66,9 +74,16 @@ final class SoundEffects {
         shared.play(buffer: shared.captureBuffer)
     }
 
-    /// Quiet descending "beep-boop" — posture has slouched.
+    /// Quiet descending "beep-boop" — posture has slouched (first cue only).
     static func playSlouch() {
         shared.play(buffer: shared.slouchBuffer)
+    }
+
+    /// Two low C3 boops — fired every 6s while the user is still slouching, after
+    /// the initial `playSlouch()`. Same low note as the second half of the slouch
+    /// pair so it feels like a continuation, not a fresh alert.
+    static func playSlouchReminder() {
+        shared.play(buffer: shared.slouchReminderBuffer)
     }
 
     /// Quiet ascending "boop-beep" — posture recovered.
@@ -90,30 +105,37 @@ final class SoundEffects {
         // Generate all tones off the main thread; when done, swap them in.
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
-            let ticks = Self.tickFrequencies.compactMap {
-                Self.generateTone(frequency: $0, duration: 0.7, amplitude: 0.35, format: self.format, sampleRate: self.sampleRate)
+            let ticks = Self.tickNotes.compactMap {
+                Self.generateTone(note: $0, duration: 0.7, amplitude: 0.35, format: self.format, sampleRate: self.sampleRate)
             }
             let capture = Self.generateTone(
-                frequency: Self.captureFrequency,
+                note: Self.captureNote,
                 duration: 1.4,
                 amplitude: 0.5,
                 format: self.format,
                 sampleRate: self.sampleRate
             )
             // G3 → C3 descending for slouch; C3 → G3 ascending for recovery.
-            // Quiet amplitude (0.15), short notes (180ms each), low register.
+            // Reminder = two C3 boops (the resolved low note from the slouch pair),
+            // played periodically while still slouching so it sounds like a sustain
+            // rather than a fresh alert.
             let slouch = Self.generateBeepPair(
-                firstFreq: 196.00, secondFreq: 130.81,  // G3, C3
+                first: .g3, second: .c3,
+                format: self.format, sampleRate: self.sampleRate
+            )
+            let slouchReminder = Self.generateBeepPair(
+                first: .c3, second: .c3,
                 format: self.format, sampleRate: self.sampleRate
             )
             let recovery = Self.generateBeepPair(
-                firstFreq: 130.81, secondFreq: 196.00,  // C3, G3
+                first: .c3, second: .g3,
                 format: self.format, sampleRate: self.sampleRate
             )
             DispatchQueue.main.async {
                 self.tickBuffers = ticks
                 self.captureBuffer = capture
                 self.slouchBuffer = slouch
+                self.slouchReminderBuffer = slouchReminder
                 self.recoveryBuffer = recovery
             }
         }
@@ -156,14 +178,16 @@ final class SoundEffects {
     /// Iphone speakers have poor response below ~250Hz, so we boost mid-frequency harmonics
     /// for perceived loudness while keeping the low fundamental for character.
     private static func generateBeepPair(
-        firstFreq: Float,
-        secondFreq: Float,
+        first: Note,
+        second: Note,
         noteDuration: Float = 0.25,
         gap: Float = 0.03,
         amplitude: Float = 1.0,
         format: AVAudioFormat,
         sampleRate: Double
     ) -> AVAudioPCMBuffer? {
+        let firstFreq = first.rawValue
+        let secondFreq = second.rawValue
         let totalDuration = noteDuration * 2 + gap
         let frameCount = AVAudioFrameCount(Double(totalDuration) * sampleRate)
         guard frameCount > 0,
@@ -209,12 +233,13 @@ final class SoundEffects {
     }
 
     private static func generateTone(
-        frequency: Float,
+        note: Note,
         duration: Float,
         amplitude: Float,
         format: AVAudioFormat,
         sampleRate: Double
     ) -> AVAudioPCMBuffer? {
+        let frequency = note.rawValue
         let frameCount = AVAudioFrameCount(Double(duration) * sampleRate)
         guard frameCount > 0,
               let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount)
