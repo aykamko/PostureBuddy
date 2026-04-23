@@ -36,12 +36,12 @@ struct PostureOverlayView: View {
             for (a, b) in Self.connections {
                 guard let ptA = kp[a], let ptB = kp[b] else { continue }
                 var path = Path()
-                path.move(to: visionToCanvas(ptA, in: size))
-                path.addLine(to: visionToCanvas(ptB, in: size))
+                path.move(to: visionToCanvas(ptA.location, in: size))
+                path.addLine(to: visionToCanvas(ptB.location, in: size))
                 context.stroke(path, with: .color(lineColor), lineWidth: 3)
             }
-            for (_, point) in kp {
-                drawDot(at: visionToCanvas(point, in: size), radius: 5, color: .white, in: &context)
+            for (_, keypoint) in kp {
+                drawDot(at: visionToCanvas(keypoint.location, in: size), radius: 5, color: .white, in: &context)
             }
 
             // Face landmarks (debug overlay — cyan to stand out from the white body dots)

@@ -48,7 +48,7 @@ struct ContentView: View {
             .task {
                 poseEstimator.updateOrientation(UIDevice.current.orientation.visionOrientation)
                 await cameraManager.requestAccessAndSetup()
-                cameraManager.setSampleBufferDelegate(poseEstimator)
+                cameraManager.setFrameDelegate(poseEstimator)
                 resumeCapture()
             }
             .onChange(of: poseEstimator.isTrackingReady) { _, ready in
@@ -111,6 +111,24 @@ struct ContentView: View {
             if !videoHidden {
                 CameraPreviewView(session: cameraManager.session)
                     .ignoresSafeArea()
+            }
+
+            // Debug: TrueDepth map jet-colormapped over the video. Magenta = IR hole.
+            // Wrapped in a GeometryReader + explicit frame + clipped so the image's
+            // intrinsic size doesn't feed back into ZStack layout (it was shifting
+            // the rest of the UI horizontally when the image was wider than the
+            // screen after aspect-fill).
+            if let depthImage = poseEstimator.depthVisualization {
+                GeometryReader { proxy in
+                    Image(decorative: depthImage, scale: 1.0, orientation: .up)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: proxy.size.width, height: proxy.size.height)
+                        .clipped()
+                }
+                .ignoresSafeArea()
+                .opacity(0.45)
+                .allowsHitTesting(false)
             }
 
             // Black dimmer between the camera preview and the skeleton. Animated via
