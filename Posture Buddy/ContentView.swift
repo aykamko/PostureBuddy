@@ -58,21 +58,12 @@ struct ContentView: View {
                 }
             }
             .onChange(of: poseEstimator.isCalibrated) { _, calibrated in
-                videoFadeTask?.cancel()
-                guard calibrated else {
-                    // Recalibration or reset — bring the preview back immediately
-                    // and fade the dimmer off.
-                    videoHidden = false
-                    videoFadeOpacity = 0
-                    return
-                }
-                videoFadeTask = Task { @MainActor in
-                    try? await Task.sleep(for: videoFadeStartDelay)
-                    if Task.isCancelled { return }
-                    videoFadeOpacity = 1.0
-                    try? await Task.sleep(for: .seconds(videoFadeDuration))
-                    if Task.isCancelled { return }
-                    videoHidden = true
+                if calibrated {
+                    hideVideo(afterDelay: videoFadeStartDelay)
+                } else {
+                    // Recalibration or reset — bring the preview back for the
+                    // upcoming calibration flow.
+                    showVideo()
                 }
             }
             .onChange(of: poseEstimator.currentPose?.score?.value) {
@@ -131,6 +122,23 @@ struct ContentView: View {
                                  isCalibrated: poseEstimator.isCalibrated)
                         .padding()
                     Spacer()
+                    // Toggle camera preview visibility. Drives the same fade state
+                    // the post-calibration auto-fade uses, so tapping here mid-fade
+                    // cancels the auto-fade task and reverses direction.
+                    Button {
+                        if isVideoHiddenOrHiding {
+                            showVideo()
+                        } else {
+                            hideVideo(afterDelay: .zero)
+                        }
+                    } label: {
+                        Image(systemName: isVideoHiddenOrHiding ? "video.slash.fill" : "video.fill")
+                            .font(.title2)
+                            .foregroundStyle(.white)
+                            .padding(12)
+                            .background(Circle().fill(.black.opacity(0.4)))
+                    }
+                    .padding()
                 }
                 Spacer()
 
@@ -164,7 +172,10 @@ struct ContentView: View {
                         TrackingLoadingView(message: "Initializing pose tracking…")
                     }
                 }
-                .padding(.bottom, 30)
+                // Lifted well above the safe-area so it stays visible when the phone
+                // is propped on books/stand and the bottom ~100pt of screen is out of
+                // view / behind a bezel / below the prop edge.
+                .padding(.bottom, 140)
             }
             .rotatedIfUpsideDown(isUpsideDown)
 
@@ -190,6 +201,37 @@ struct ContentView: View {
                 .transition(.opacity)
             }
         }
+    }
+
+    /// `true` once the fade-to-black has passed its midpoint or the preview has
+    /// been fully removed. Drives the camera-toggle button's icon and direction
+    /// (tap while "hiding-or-hidden" reverses to show).
+    private var isVideoHiddenOrHiding: Bool {
+        videoHidden || videoFadeOpacity > 0.5
+    }
+
+    /// Fades the dimmer over the preview and, once fully opaque, removes the
+    /// `CameraPreviewView` from the hierarchy (saves GPU). `afterDelay` = 0 for
+    /// manual toggle; the post-calibration auto-fade uses `videoFadeStartDelay`.
+    private func hideVideo(afterDelay: Duration) {
+        videoFadeTask?.cancel()
+        videoFadeTask = Task { @MainActor in
+            if afterDelay > .zero {
+                try? await Task.sleep(for: afterDelay)
+                if Task.isCancelled { return }
+            }
+            videoFadeOpacity = 1.0
+            try? await Task.sleep(for: .seconds(videoFadeDuration))
+            if Task.isCancelled { return }
+            videoHidden = true
+        }
+    }
+
+    /// Re-adds the preview (if removed) and animates the dimmer back to transparent.
+    private func showVideo() {
+        videoFadeTask?.cancel()
+        videoHidden = false
+        videoFadeOpacity = 0
     }
 
     /// Resumes or starts camera capture: keeps the screen awake, starts the capture

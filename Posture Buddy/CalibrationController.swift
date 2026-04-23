@@ -28,14 +28,17 @@ final class CalibrationController: ObservableObject {
     private static let burstSampleCount: Int = 10
     private static let burstMinSuccessfulSamples: Int = 6
 
-    // `voice == nil` uses a stub sound effect instead of a recorded prompt. Replace
-    // once we record a `.leanForward` voice clip. Order drives snapshot index → baseline
-    // slot mapping in `runFlow` (0=middle, 1=leanForward, 2=left, 3=right).
+    // Order drives snapshot index → baseline slot mapping in `runFlow`
+    // (0=center/middle, 1=left, 2=right, 3=leanForward). The three yaw captures
+    // run first in one natural head-scan sequence; the forward-lean sample comes
+    // last, at the center yaw, to derive `forwardSign` (see PostureModels).
+    // `voice == nil` falls back to a stub sound effect — no steps use that now that
+    // every prompt has a recorded clip, but we keep the optional for flexibility.
     private static let steps: [(label: String, instruction: String, voice: VoicePrompt?)] = [
-        ("middle", "Look at the middle of your screen", .lookMiddle),
-        ("leanForward", "Now lean forward", nil),
-        ("left", "Sit up straight, then look left", .lookLeft),
+        ("middle", "Sit up straight, look at the center", .sitStraightLookCenter),
+        ("left", "Look at the left of your screen", .lookLeft),
         ("right", "Look at the right of your screen", .lookRight),
+        ("leanForward", "Look at the center and lean forward", .leanForward),
     ]
 
     /// Starts a fresh guided calibration. If one was already running, it's cancelled first.
@@ -74,11 +77,9 @@ final class CalibrationController: ObservableObject {
         await SoundEffects.prime()
         try Task.checkCancellation()
 
-        instruction = "Sit up straight"
-        await VoiceGuide.shared.say(.letsCalibrate)
-        try Task.checkCancellation()
-        try await Task.sleep(for: Self.postVoicePause)
-
+        // No separate intro voice — the first step's prompt ("Starting calibration,
+        // please sit up straight and look at the center of your screen") does double
+        // duty as the session intro.
         var snapshots: [PostureAngles] = []
         for step in Self.steps {
             guard let angles = try await captureSnapshot(for: step, poseEstimator: poseEstimator) else {
@@ -87,12 +88,12 @@ final class CalibrationController: ObservableObject {
             snapshots.append(angles)
         }
 
-        // Index order must match Self.steps: 0=middle, 1=leanForward, 2=left, 3=right.
+        // Index order must match Self.steps: 0=center (middle yaw), 1=left, 2=right, 3=leanForward.
         let committed = poseEstimator.calibrate(
             middle: snapshots[0],
-            forwardLean: snapshots[1],
-            left: snapshots[2],
-            right: snapshots[3]
+            forwardLean: snapshots[3],
+            left: snapshots[1],
+            right: snapshots[2]
         )
         guard committed else {
             await VoiceGuide.shared.say(.poseNotDetected)

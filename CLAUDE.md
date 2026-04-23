@@ -52,13 +52,13 @@ Owned by `CalibrationController` (a `@MainActor` `ObservableObject`). The contro
 - Triggered by **Set Baseline Posture** (or Recalibrate), which calls `calibration.start(poseEstimator:, soundCoach:, notificationManager:)`. Flow:
   1. Reset: discard existing baselines (`poseEstimator.resetCalibration()`), cancel slouch/recovery timers (`soundCoach.reset()`), and clear the pending-alert banner (`notificationManager.update(score: nil)`). This stops scoring + any in-flight coaching sounds so they can't fire mid-calibration. Consequence: cancelling calibration leaves the app uncalibrated — there's no "restore previous baselines" path.
   2. Audio pipeline prime (1s silent buffer) + "Get ready…" spinner
-  3. Voice: *"Let's calibrate. Please sit up straight."*
-  4. Four capture positions in order: **middle** (`look_middle.aiff`) → **leanForward** (no recorded voice yet — uses `SoundEffects.playSlouch()` as a stub audio cue; on-screen says "Now lean forward") → **left** (`look_left.aiff`; on-screen "Sit up straight, then look left") → **right** (`look_right.aiff`). Each position runs:
-     - Voice prompt (or stub sound for leanForward)
+  3. Four capture positions, runtime order: **center** (`sit_straight_look_center.aiff` — fused intro+first-position prompt, labelled `middle` internally to match `CalibrationPosition.middle`) → **left** (`look_left.aiff`) → **right** (`look_right.aiff`) → **leanForward** (`lean_forward.aiff`; prompt says "Look at the center and lean forward"). Each position runs:
+     - Voice prompt
      - 3-beat marimba countdown (3, 2, 1) with tick + capture sounds
      - **Burst-sample** 10 frames over ~1.25 s after count=1, then take the componentwise median (`PostureAngles.median(of:)`, which medians each `YawTelemetry` field independently). Single-frame capture was unreliable — jittery features like `contourSpreadOverH` frequently spiked high for one frame, placing the baseline outside the user's steady-state distribution and causing runtime frames to fall outside the classification threshold. Require ≥6 successful samples or the flow aborts with *"Couldn't detect your pose."*
-     - The middle and leanForward captures together feed the `forwardSign` derivation (see Asymmetric scoring); middle/left/right feed `YawCalibration` for yaw classification. The leanForward sample is *only* used for the sign — it isn't a yaw baseline.
-  5. Voice: *"Calibration is complete."*
+     - The center + leanForward captures together feed the `forwardSign` derivation (see Asymmetric scoring); center/left/right feed `YawCalibration` for yaw classification. The leanForward sample is *only* used for the sign — it isn't a yaw baseline. `runFlow` maps `snapshots[0, 1, 2, 3]` to `calibrate(middle: snapshots[0], forwardLean: snapshots[3], left: snapshots[1], right: snapshots[2])`.
+     - The three yaw captures come first as a natural "scan left-to-right" head motion; the lean-forward capture is last so the user only has to reset posture once (back to center, then lean).
+  4. Voice: *"Calibration is complete."*
 - Cancel button (the calibrate button goes red during calibration) calls `calibration.cancel()` — cancels the controller's task, stops voice, reverts UI. Baselines remain discarded (reset at step 1); user must re-run calibration before scoring resumes.
 - If `snapshotCurrentAngles()` returns nil at any capture moment (no valid pose), the flow aborts with *"Couldn't detect your pose. Please try again."*
 - The controller's run-flow uses `try Task.checkCancellation()` + `try await Task.sleep(for:)` with a single `do/catch cleanup()` wrapper. Don't add manual `if Task.isCancelled { … }` guards — the throwing path already handles them.
@@ -73,12 +73,13 @@ Owned by `CalibrationController` (a `@MainActor` `ObservableObject`). The contro
 ### Re-recording the voice prompts
 The script:
 ```
-Let's calibrate. Please sit up straight.        → lets_calibrate.aiff
-First, look at the middle of your screen.       → look_middle.aiff
-Next, look at the left of your screen.          → look_left.aiff
-Last, look at the right of your screen.         → look_right.aiff
-Calibration is complete.                        → calibration_complete.aiff
-Couldn't detect your pose. Please try again.    → pose_not_detected.aiff
+Starting calibration! Please sit up straight
+  and look at the center of your screen.                    → sit_straight_look_center.aiff
+Look at the left of your screen.                            → look_left.aiff
+Look at the right of your screen.                           → look_right.aiff
+Look back at the center and lean forward slightly.          → lean_forward.aiff
+Calibration is complete.                                    → calibration_complete.aiff
+Couldn't detect your pose. Please try again.                → pose_not_detected.aiff
 ```
 
 Workflow:
@@ -161,13 +162,12 @@ Posture Buddy/                          (iOS target)
 │   ├── AlertOverlay.swift              Custom modal (native .alert doesn't respect manual rotation)
 │   └── GuidedCalibrationOverlay.swift  Instruction text + big countdown number
 └── VoicePrompts/                       Bundled pre-recorded calibration audio (ElevenLabs "Clara")
-    ├── lets_calibrate.aiff
-    ├── look_middle.aiff
+    ├── sit_straight_look_center.aiff
     ├── look_left.aiff
     ├── look_right.aiff
+    ├── lean_forward.aiff
     ├── calibration_complete.aiff
     └── pose_not_detected.aiff
-    (no lean_forward clip yet — calibration step uses `SoundEffects.playSlouch()` as a stub)
 
 Posture Buddy Watch Watch App/          (watchOS target — Xcode-named with the doubled "Watch")
 ├── Posture_Buddy_WatchApp.swift        @main App entry; owns WatchPostureReceiver as @StateObject

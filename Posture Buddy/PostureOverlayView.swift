@@ -42,19 +42,6 @@ struct PostureOverlayView: View {
 
             // Face landmarks (debug overlay — cyan to stand out from the white body dots)
             if let face = pose.faceLandmarks {
-                // Bounding box
-                let bb = face.boundingBox
-                let topLeft = visionToCanvas(CGPoint(x: bb.minX, y: bb.maxY), in: size)
-                let bottomRight = visionToCanvas(CGPoint(x: bb.maxX, y: bb.minY), in: size)
-                var boxPath = Path()
-                boxPath.addRect(CGRect(
-                    x: topLeft.x,
-                    y: topLeft.y,
-                    width: bottomRight.x - topLeft.x,
-                    height: bottomRight.y - topLeft.y
-                ))
-                context.stroke(boxPath, with: .color(.cyan.opacity(0.6)), lineWidth: 1)
-
                 for point in face.points {
                     drawDot(at: visionToCanvas(point, in: size), radius: 1.5, color: .cyan, in: &context)
                 }

@@ -4,10 +4,12 @@ import Foundation
 /// Keys for the pre-recorded voice prompts bundled under `VoicePrompts/*.aiff`.
 /// Raw values match the filename (without extension).
 enum VoicePrompt: String, CaseIterable {
-    case letsCalibrate = "lets_calibrate"
-    case lookMiddle = "look_middle"
+    // Fused intro + first-position prompt: "Starting calibration! Please sit up
+    // straight and look at the center of your screen."
+    case sitStraightLookCenter = "sit_straight_look_center"
     case lookLeft = "look_left"
     case lookRight = "look_right"
+    case leanForward = "lean_forward"
     case calibrationComplete = "calibration_complete"
     case poseNotDetected = "pose_not_detected"
 }
