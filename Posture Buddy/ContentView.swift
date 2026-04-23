@@ -34,6 +34,10 @@ struct ContentView: View {
     @State private var videoFadeOpacity: Double = 0
     @State private var videoFadeTask: Task<Void, Never>?
 
+    /// Toggles the main on-screen visual between the friendly figure caricature
+    /// (false, default) and the live skeleton overlay (true, debug).
+    @State private var showDebugOverlay: Bool = false
+
     private let trackingTimeoutSeconds: Double = 45
     private let videoFadeStartDelay: Duration = .seconds(3)
     private let videoFadeDuration: Double = 1.0
@@ -45,6 +49,10 @@ struct ContentView: View {
             .animation(.easeInOut(duration: 0.2), value: calibration.instruction)
             .animation(.easeInOut(duration: 0.2), value: showTrackingFailedAlert)
             .animation(.easeInOut(duration: videoFadeDuration), value: videoFadeOpacity)
+            // Drives PostureFigureView's head pivot. 0.4s feels natural for body
+            // motion (slower than the snappy 0.2s state changes).
+            .animation(.easeInOut(duration: 0.4), value: poseEstimator.currentPose?.score?.value)
+            .animation(.easeInOut(duration: 0.2), value: showDebugOverlay)
             .task {
                 poseEstimator.updateOrientation(UIDevice.current.orientation.visionOrientation)
                 await cameraManager.requestAccessAndSetup()
@@ -112,9 +120,17 @@ struct ContentView: View {
                 .ignoresSafeArea()
                 .allowsHitTesting(false)
 
-            PostureOverlayView(detectedPose: poseEstimator.currentPose)
-                .ignoresSafeArea()
-                .rotatedIfUpsideDown(isUpsideDown)
+            // Default visual is the friendly figure; Debug toggle (under
+            // CalibrateButton) swaps it for the raw skeleton overlay.
+            if showDebugOverlay {
+                PostureOverlayView(detectedPose: poseEstimator.currentPose)
+                    .ignoresSafeArea()
+                    .rotatedIfUpsideDown(isUpsideDown)
+            } else {
+                PostureFigureView(score: poseEstimator.currentPose?.score)
+                    .ignoresSafeArea()
+                    .rotatedIfUpsideDown(isUpsideDown)
+            }
 
             VStack {
                 HStack {
@@ -167,10 +183,23 @@ struct ContentView: View {
                         TrackingLoadingView(message: "Initializing pose tracking…")
                     }
                 }
-                // Lifted well above the safe-area so it stays visible when the phone
-                // is propped on books/stand and the bottom ~100pt of screen is out of
-                // view / behind a bezel / below the prop edge.
-                .padding(.bottom, 140)
+                // Small gap below the calibrate button before the Debug toggle.
+                // The Debug button itself carries the rest of the bottom-clearance
+                // (so the prop / bezel doesn't occlude either button).
+                .padding(.bottom, 12)
+
+                // Debug toggle — outside the `isTrackingReady` Group so it's
+                // always available (useful for previewing the figure even before
+                // pose tracking has warmed up).
+                Button { showDebugOverlay.toggle() } label: {
+                    Text(showDebugOverlay ? "Hide Debug" : "Debug")
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(Capsule().stroke(.white.opacity(0.4), lineWidth: 1))
+                }
+                .padding(.bottom, 100)
             }
             .rotatedIfUpsideDown(isUpsideDown)
 

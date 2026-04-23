@@ -103,7 +103,7 @@ Workflow:
 4. Replace files in `Posture Buddy/VoicePrompts/`. Filenames must match `VoicePrompt.rawValue` exactly.
 
 ### Battery: drop the video preview post-calibration
-- Once `poseEstimator.isCalibrated` becomes true, `ContentView` waits 3 s, fades a black overlay over the preview in ~1 s, then *removes* the `CameraPreviewView` from the view hierarchy. That deallocates the `AVCaptureVideoPreviewLayer`, which is the main GPU consumer — the capture session and `PoseEstimator` keep running unchanged, so pose detection and scoring are unaffected. The skeleton (`PostureOverlayView`) renders above the dimmer and stays visible throughout.
+- Once `poseEstimator.isCalibrated` becomes true, `ContentView` waits 3 s, fades a black overlay over the preview in ~1 s, then *removes* the `CameraPreviewView` from the view hierarchy. That deallocates the `AVCaptureVideoPreviewLayer`, which is the main GPU consumer — the capture session and `PoseEstimator` keep running unchanged, so pose detection and scoring are unaffected. By default `PostureFigureView` (a stylized side-profile figure that pivots forward at the shoulders as the score drops) renders above the dimmer; the on-screen *Debug* toggle below CalibrateButton swaps it for `PostureOverlayView` (skeleton + face landmarks). Either way the upper-layer visual stays visible after the camera fade.
 - Reset path: when `isCalibrated` goes false (user taps Recalibrate), the preview is re-added to the hierarchy immediately and the dimmer fades off over 1 s so you can see yourself during the new calibration flow. Scene-phase changes (background/foreground) do **not** touch the fade state — returning from background on a calibrated session keeps the preview hidden.
 - The dimmer sits between the camera preview and the skeleton layer in the `ZStack`, so slouching feedback stays crisp on top of a plain black background.
 
@@ -173,6 +173,7 @@ Posture Buddy/                          (iOS target)
 ├── Views/                              Leaf SwiftUI views composed by ContentView
 │   ├── ScoreHUDView.swift              108pt circle, color-coded score
 │   ├── CalibrateButton.swift           Capsule button, flips to red "Cancel" while calibrating
+│   ├── PostureFigureView.swift         Side-profile caricature; head+neck pivot forward at the shoulder as score drops; default after-calibration visual
 │   ├── TrackingLoadingView.swift       Spinner + message while pose model is loading
 │   ├── AlertOverlay.swift              Custom modal (native .alert doesn't respect manual rotation)
 │   └── GuidedCalibrationOverlay.swift  Instruction text + big countdown number
@@ -209,9 +210,9 @@ PoseEstimator.captureOutput (nonisolated, 10 FPS throttled)
     ▼  Task { @MainActor } publishes DetectedPose (keypoints w/ isStale + faceLandmarks + score)
 ContentView
     ├── CameraPreviewView        (bottom layer, not rotated; faded out + removed 3 s after calibration)
-    ├── PostureOverlayView       (Canvas, rotated with UI — fresh white, stale purple, face cyan)
+    ├── PostureFigureView | PostureOverlayView   (Debug toggle — default is the figure pivoting from score; debug shows skeleton + face landmarks)
     ├── ScoreHUDView             (108pt circle, color-coded score)
-    ├── CalibrateButton / TrackingLoadingView / GuidedCalibrationOverlay / AlertOverlay
+    ├── CalibrateButton / Debug toggle / TrackingLoadingView / GuidedCalibrationOverlay / AlertOverlay
     └── onChange(score) → NotificationManager.update + PostureSoundCoach.update (skips nil scores)
                           → on alert / slouch / recovery: WatchBridge.shared.notify(...)
 ```
