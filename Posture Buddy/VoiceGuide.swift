@@ -16,8 +16,10 @@ enum VoicePrompt: String, CaseIterable {
 
 /// Plays pre-recorded voice prompts from the app bundle.
 /// Previously used `AVSpeechSynthesizer`, but iOS default TTS voices sound robotic
-/// and premium voices require user downloads. Instead we ship high-quality recordings
-/// generated on macOS with Matilda (Premium) via the `say` command.
+/// and premium voices require per-user downloads. Instead we ship recordings
+/// generated with ElevenLabs (Clara) and bundled as `VoicePrompts/*.aiff`. Raw
+/// editing + conversion workflow lives in `CLAUDE.md` under "Re-recording the
+/// voice prompts."
 @MainActor
 final class VoiceGuide: NSObject {
     static let shared = VoiceGuide()

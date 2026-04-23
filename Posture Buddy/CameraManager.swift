@@ -52,14 +52,20 @@ final class CameraManager: ObservableObject {
         }
         session.addInput(input)
 
+        // Disable Center Stage: we want the raw wide frame, not iOS auto-framing
+        // on the user's face (which would crop/pan the feed and invalidate our
+        // bbox-normalized yaw features). `.app` mode overrides the system-wide
+        // toggle for this session only. Both properties are class-level on
+        // AVCaptureDevice, not per-device, so they live outside the lock.
+        AVCaptureDevice.centerStageControlMode = .app
+        AVCaptureDevice.isCenterStageEnabled = false
+
         try? device.lockForConfiguration()
         device.videoZoomFactor = device.minAvailableVideoZoomFactor
         device.unlockForConfiguration()
 
         let output = AVCaptureVideoDataOutput()
-        // Use the camera's native YUV format — no on-the-fly conversion per frame.
-        // (BGRA + IOSurface/Metal flags were needed for the 3D pose pipeline,
-        // which we no longer use.)
+        // Use the camera's native YUV format — avoids on-the-fly conversion per frame.
         output.videoSettings = [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
         ]

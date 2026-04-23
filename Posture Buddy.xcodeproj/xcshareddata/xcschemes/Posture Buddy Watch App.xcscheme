@@ -16,8 +16,8 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "5500CE2E2F98727F00F7F7F5"
-               BuildableName = "Posture Buddy Watch Watch App.app"
-               BlueprintName = "Posture Buddy Watch Watch App"
+               BuildableName = "Posture Buddy Watch App.app"
+               BlueprintName = "Posture Buddy Watch App"
                ReferencedContainer = "container:Posture Buddy.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
@@ -60,8 +60,8 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "5500CE2E2F98727F00F7F7F5"
-            BuildableName = "Posture Buddy Watch Watch App.app"
-            BlueprintName = "Posture Buddy Watch Watch App"
+            BuildableName = "Posture Buddy Watch App.app"
+            BlueprintName = "Posture Buddy Watch App"
             ReferencedContainer = "container:Posture Buddy.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
@@ -77,8 +77,8 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "5500CE2E2F98727F00F7F7F5"
-            BuildableName = "Posture Buddy Watch Watch App.app"
-            BlueprintName = "Posture Buddy Watch Watch App"
+            BuildableName = "Posture Buddy Watch App.app"
+            BlueprintName = "Posture Buddy Watch App"
             ReferencedContainer = "container:Posture Buddy.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>

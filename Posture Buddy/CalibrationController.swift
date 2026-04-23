@@ -1,10 +1,9 @@
 import Combine
 import Foundation
-import UIKit
 
 /// Drives the guided-calibration flow end-to-end: voice prompts, marimba countdown,
-/// haptics, and snapshot capture at each of the three head positions (middle/left/right).
-/// Publishes `instruction` and `countdown` so the UI can reflect progress; holds a single
+/// and snapshot capture at each position (middle/left/right/leanForward). Publishes
+/// `instruction` and `countdown` so the UI can reflect progress; holds a single
 /// cancellable `Task` so `cancel()` unwinds the flow cleanly from anywhere.
 @MainActor
 final class CalibrationController: ObservableObject {
@@ -32,9 +31,7 @@ final class CalibrationController: ObservableObject {
     // (0=center/middle, 1=left, 2=right, 3=leanForward). The three yaw captures
     // run first in one natural head-scan sequence; the forward-lean sample comes
     // last, at the center yaw, to derive `forwardSign` (see PostureModels).
-    // `voice == nil` falls back to a stub sound effect — no steps use that now that
-    // every prompt has a recorded clip, but we keep the optional for flexibility.
-    private static let steps: [(label: String, instruction: String, voice: VoicePrompt?)] = [
+    private static let steps: [(label: String, instruction: String, voice: VoicePrompt)] = [
         ("middle", "Sit up straight, look at the center", .sitStraightLookCenter),
         ("left", "Look to the left", .lookLeft),
         ("right", "Look to the right", .lookRight),
@@ -77,9 +74,6 @@ final class CalibrationController: ObservableObject {
         await SoundEffects.prime()
         try Task.checkCancellation()
 
-        // No separate intro voice — the first step's prompt ("Starting calibration,
-        // please sit up straight and look at the center of your screen") does double
-        // duty as the session intro.
         var snapshots: [PostureAngles] = []
         for step in Self.steps {
             guard let angles = try await captureSnapshot(for: step, poseEstimator: poseEstimator) else {
@@ -111,18 +105,11 @@ final class CalibrationController: ObservableObject {
     /// Returns nil (after triggering cleanup + playing the failure prompt) if the pose
     /// estimator couldn't snapshot valid angles at the capture moment.
     private func captureSnapshot(
-        for step: (label: String, instruction: String, voice: VoicePrompt?),
+        for step: (label: String, instruction: String, voice: VoicePrompt),
         poseEstimator: PoseEstimator
     ) async throws -> PostureAngles? {
         instruction = step.instruction
-        if let voice = step.voice {
-            await VoiceGuide.shared.say(voice)
-        } else {
-            // Stub audio for positions without a recorded voice prompt (currently
-            // the lean-forward step). Using `playSlouch` because leaning forward is
-            // the posture it maps to — placeholder until we cut a real clip.
-            SoundEffects.playSlouch()
-        }
+        await VoiceGuide.shared.say(step.voice)
         try Task.checkCancellation()
         try await Task.sleep(for: Self.postVoicePause)
 

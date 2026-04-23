@@ -7,7 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		5500CE392F98728000F7F7F5 /* Posture Buddy Watch Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 5500CE2F2F98727F00F7F7F5 /* Posture Buddy Watch Watch App.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		5500CE392F98728000F7F7F5 /* Posture Buddy Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 5500CE2F2F98727F00F7F7F5 /* Posture Buddy Watch App.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -16,7 +16,7 @@
 			containerPortal = 55A8C9102F96E9830010C460 /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = 5500CE2E2F98727F00F7F7F5;
-			remoteInfo = "Posture Buddy Watch Watch App";
+			remoteInfo = "Posture Buddy Watch App";
 		};
 /* End PBXContainerItemProxy section */
 
@@ -27,7 +27,7 @@
 			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
 			dstSubfolderSpec = 16;
 			files = (
-				5500CE392F98728000F7F7F5 /* Posture Buddy Watch Watch App.app in Embed Watch Content */,
+				5500CE392F98728000F7F7F5 /* Posture Buddy Watch App.app in Embed Watch Content */,
 			);
 			name = "Embed Watch Content";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -35,14 +35,14 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
-		5500CE2F2F98727F00F7F7F5 /* Posture Buddy Watch Watch App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Posture Buddy Watch Watch App.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		5500CE2F2F98727F00F7F7F5 /* Posture Buddy Watch App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Posture Buddy Watch App.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		55A8C9182F96E9830010C460 /* Posture Buddy.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Posture Buddy.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		5500CE302F98727F00F7F7F5 /* Posture Buddy Watch Watch App */ = {
+		5500CE302F98727F00F7F7F5 /* Posture Buddy Watch App */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = "Posture Buddy Watch Watch App";
+			path = "Posture Buddy Watch App";
 			sourceTree = "<group>";
 		};
 		55A8C91A2F96E9830010C460 /* Posture Buddy */ = {
@@ -74,7 +74,7 @@
 			isa = PBXGroup;
 			children = (
 				55A8C91A2F96E9830010C460 /* Posture Buddy */,
-				5500CE302F98727F00F7F7F5 /* Posture Buddy Watch Watch App */,
+				5500CE302F98727F00F7F7F5 /* Posture Buddy Watch App */,
 				55A8C9192F96E9830010C460 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -83,7 +83,7 @@
 			isa = PBXGroup;
 			children = (
 				55A8C9182F96E9830010C460 /* Posture Buddy.app */,
-				5500CE2F2F98727F00F7F7F5 /* Posture Buddy Watch Watch App.app */,
+				5500CE2F2F98727F00F7F7F5 /* Posture Buddy Watch App.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -91,9 +91,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		5500CE2E2F98727F00F7F7F5 /* Posture Buddy Watch Watch App */ = {
+		5500CE2E2F98727F00F7F7F5 /* Posture Buddy Watch App */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 5500CE3A2F98728000F7F7F5 /* Build configuration list for PBXNativeTarget "Posture Buddy Watch Watch App" */;
+			buildConfigurationList = 5500CE3A2F98728000F7F7F5 /* Build configuration list for PBXNativeTarget "Posture Buddy Watch App" */;
 			buildPhases = (
 				5500CE2B2F98727F00F7F7F5 /* Sources */,
 				5500CE2C2F98727F00F7F7F5 /* Frameworks */,
@@ -104,13 +104,13 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				5500CE302F98727F00F7F7F5 /* Posture Buddy Watch Watch App */,
+				5500CE302F98727F00F7F7F5 /* Posture Buddy Watch App */,
 			);
-			name = "Posture Buddy Watch Watch App";
+			name = "Posture Buddy Watch App";
 			packageProductDependencies = (
 			);
-			productName = "Posture Buddy Watch Watch App";
-			productReference = 5500CE2F2F98727F00F7F7F5 /* Posture Buddy Watch Watch App.app */;
+			productName = "Posture Buddy Watch App";
+			productReference = 5500CE2F2F98727F00F7F7F5 /* Posture Buddy Watch App.app */;
 			productType = "com.apple.product-type.application";
 		};
 		55A8C9172F96E9830010C460 /* Posture Buddy */ = {
@@ -170,7 +170,7 @@
 			projectRoot = "";
 			targets = (
 				55A8C9172F96E9830010C460 /* Posture Buddy */,
-				5500CE2E2F98727F00F7F7F5 /* Posture Buddy Watch Watch App */,
+				5500CE2E2F98727F00F7F7F5 /* Posture Buddy Watch App */,
 			);
 		};
 /* End PBXProject section */
@@ -212,7 +212,7 @@
 /* Begin PBXTargetDependency section */
 		5500CE382F98728000F7F7F5 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = 5500CE2E2F98727F00F7F7F5 /* Posture Buddy Watch Watch App */;
+			target = 5500CE2E2F98727F00F7F7F5 /* Posture Buddy Watch App */;
 			targetProxy = 5500CE372F98728000F7F7F5 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
@@ -228,7 +228,7 @@
 				DEVELOPMENT_TEAM = ZC95DNC67Z;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "Posture Buddy Watch";
+				INFOPLIST_KEY_CFBundleDisplayName = "Posture Buddy";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = "akamko.Posture-Buddy";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -261,7 +261,7 @@
 				DEVELOPMENT_TEAM = ZC95DNC67Z;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "Posture Buddy Watch";
+				INFOPLIST_KEY_CFBundleDisplayName = "Posture Buddy";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = "akamko.Posture-Buddy";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -482,7 +482,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		5500CE3A2F98728000F7F7F5 /* Build configuration list for PBXNativeTarget "Posture Buddy Watch Watch App" */ = {
+		5500CE3A2F98728000F7F7F5 /* Build configuration list for PBXNativeTarget "Posture Buddy Watch App" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				5500CE3B2F98728000F7F7F5 /* Debug */,

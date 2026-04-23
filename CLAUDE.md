@@ -21,6 +21,7 @@ iOS app that monitors sitting posture in real time using the front camera. The u
   - Cache survives scene-phase changes; the first fresh frame after a gap overwrites it.
 - **Asymmetric scoring (forward-only penalty).** `angleFromVertical` returns a *signed* angle (drop-in replaced the old `abs(dx)` formulation), so the ear-shoulder angle now lives in [-90°, +90°] with sign indicating which side of vertical the line tips toward. At calibration, we capture a "lean forward briefly" sample at the middle yaw (see Guided calibration flow), compute `forwardSign = sign(forwardLean.earShoulderAngle − middle.earShoulderAngle)`, and stash it on `PostureBaselines`. At scoring time, `PostureAnalyzer.forwardDeviation(current, baseline, sign)` computes `max(0, (current − baseline) × sign)` — positive only in the forward direction, zero for backward lean. If the user's lean sample wasn't decisive (|Δ| < 1°), `forwardSign` is nil and scoring falls back to the old symmetric `abs(current − baseline)` behavior. Net effect: leaning back into your chair doesn't ding the score; slouching forward does.
 - **Brief classification pauses don't disturb downstream timers.** `ContentView.onChange` drops nil scores before forwarding to `PostureSoundCoach` / `NotificationManager`, so a single flickered frame can't cancel an in-flight slouch/recovery timer or reset the alert countdown. Long-horizon resets still happen via `pauseCapture` (scene phase change) and `calibration.start` — those call `reset()` / `update(score: nil)` explicitly. Without this filter the slouch and recovery sounds were effectively never firing because every ~200 ms pause interrupted them.
+- **No phone haptics, anywhere.** The iPhone is typically balanced on books / a stand with the camera pointed at the user, and any buzz can knock it over mid-session. All iOS-side `UIImpactFeedbackGenerator` / `UINotificationFeedbackGenerator` calls have been removed (previously in `CalibrationController` countdown + capture, and in `NotificationManager.triggerAlert`). Don't reintroduce them. Haptic feedback lives exclusively on the Watch companion (see Watch companion section) via `WatchBridge.shared.notify(.slouch | .recovery)` → `WKInterfaceDevice.play(...)` on the watch side. The system notification still posts from `NotificationManager.triggerAlert`, but that routes through iOS's notification UI without a direct haptic from our code.
 - **Tunable timing constants** (currently set for active testing — bump back up before shipping):
   - `NotificationManager.alertDelay = 10s` (system-notification trigger after sustained poor posture; production target ~30s)
   - `PostureSoundCoach.slouchDelay = 6s`, `recoveryDelay = 3s` (audible coach cues for sustained fair/poor and good-after-alert states)
@@ -94,7 +95,7 @@ Workflow:
 - The dimmer sits between the camera preview and the skeleton layer in the `ZStack`, so slouching feedback stays crisp on top of a plain black background.
 
 ### Watch companion (haptic feedback)
-- Separate watchOS target: **`Posture Buddy Watch Watch App`** (Xcode-generated name with the doubled "Watch"). Three files: `Posture_Buddy_WatchApp.swift` (`@main`), `ContentView.swift` (status view), `WatchPostureReceiver.swift` (`WCSession` delegate + haptic playback).
+- Separate watchOS target: **`Posture Buddy Watch App`**. Three files: `Posture_Buddy_WatchApp.swift` (`@main`), `ContentView.swift` (status view), `WatchPostureReceiver.swift` (`WCSession` delegate + haptic playback).
 - iOS sends events via **`WatchBridge.shared.notify(_: Event)`** — a `WCSession` singleton that fires `sendMessage` (live-only, drops if watch unreachable). Two events: **`.slouch`** (from `PostureSoundCoach` when the slouch sound plays after sustained fair/poor) and **`.recovery`** (when the recovery sound plays after sustained good post-alert). The 30 s system notification path *intentionally does not* fire a separate watch event — it would arrive ~4 s after `.slouch` for the same condition and just feel like a double-buzz.
 - The `WCSession` is activated in `Posture_BuddyApp.task` via `_ = WatchBridge.shared`. iOS-side delegate methods + reachability changes are logged under `[Watch]`.
 - Watch side: `WatchPostureReceiver` plays `WKInterfaceDevice.current().play(.notification)` for slouch and `.success` for recovery; updates `lastEvent` for the status view.
@@ -154,7 +155,6 @@ Posture Buddy/                          (iOS target)
 ├── SoundEffects.swift                  Synthesized marimba tones + beep pairs
 ├── WatchBridge.swift                   WCSession singleton; sends `.slouch` / `.recovery` haptic events to paired watch
 ├── Log.swift                           Timestamped print helper (HH:mm:ss.SSS); thread-safe DateFormatter under OSAllocatedUnfairLock
-├── SandboxDiagnostics.swift            Launch-time per-directory size dump (debug; catches unexpected disk growth)
 ├── Views/                              Leaf SwiftUI views composed by ContentView
 │   ├── ScoreHUDView.swift              108pt circle, color-coded score
 │   ├── CalibrateButton.swift           Capsule button, flips to red "Cancel" while calibrating
@@ -169,7 +169,7 @@ Posture Buddy/                          (iOS target)
     ├── calibration_complete.aiff
     └── pose_not_detected.aiff
 
-Posture Buddy Watch Watch App/          (watchOS target — Xcode-named with the doubled "Watch")
+Posture Buddy Watch App/                (watchOS target)
 ├── Posture_Buddy_WatchApp.swift        @main App entry; owns WatchPostureReceiver as @StateObject
 ├── ContentView.swift                   Minimal status view — shows last-received event tag
 └── WatchPostureReceiver.swift          WCSession delegate; plays WKInterfaceDevice haptics on incoming `slouch`/`recovery` events

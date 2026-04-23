@@ -1,6 +1,6 @@
 //
 //  ContentView.swift
-//  Posture Buddy Watch Watch App
+//  Posture Buddy Watch App
 //
 //  Created by Aleks Kamko on 4/21/26.
 //

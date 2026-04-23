@@ -41,7 +41,6 @@ struct Posture_BuddyApp: App {
             ContentView()
                 .environmentObject(notificationManager)
                 .task {
-                    SandboxDiagnostics.logStorageUsage()
                     SoundEffects.configureAudioSession()
                     await notificationManager.requestNotificationPermission()
                     _ = WatchBridge.shared  // activate WCSession at launch

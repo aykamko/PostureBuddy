@@ -1,4 +1,4 @@
-import UIKit
+import Foundation
 import UserNotifications
 import Combine
 
@@ -18,7 +18,6 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
 
     private var poorPostureStartTime: Date?
     private var lastAlertTime: Date?
-    private let haptic = UIImpactFeedbackGenerator(style: .heavy)
 
     override init() {
         super.init()
@@ -63,11 +62,10 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
     }
 
     private func triggerAlert() {
-        haptic.prepare()
-        haptic.impactOccurred()
-        // No watch haptic here — the coach already fired `.slouch` at 6s; another
-        // haptic 4s later for the same slouch condition is just noise on the wrist.
-
+        // No phone haptic — the phone is typically propped on books/a stand and a
+        // buzz can knock it over. The system notification still posts, and the watch
+        // companion already buzzed for the same condition 4s earlier via the coach
+        // `.slouch` event, so the user is covered.
         let content = UNMutableNotificationContent()
         content.title = "Posture Check"
         content.body = "You've been slouching for a while. Time to sit up straight!"
