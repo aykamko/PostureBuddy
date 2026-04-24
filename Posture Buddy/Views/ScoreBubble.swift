@@ -30,8 +30,9 @@ struct ScoreBubble: View {
                 Circle()
                     .stroke(ringColor, lineWidth: 5)
                 Text(label)
-                    .font(.system(size: 30, weight: .bold))
+                    .font(.system(size: 30, weight: .bold).monospacedDigit())
                     .foregroundStyle(.white)
+                    .contentTransition(.identity)
             }
             .frame(width: Self.circleSize, height: Self.circleSize)
 

@@ -193,7 +193,7 @@ struct PostureBuddy3DView: UIViewRepresentable {
         /// top of the head sphere. Empirical for the current rig — Blender
         /// bones extend along their +Y axis by convention. 0.5 is the sweet
         /// spot where the bubble's tail tip sits just above the head crown.
-        static let headTopOffset: Float = 0.5
+        static let headTopOffset: Float = 0.55
         /// Where to publish the projected head position (set from updateUIView
         /// each pass). Throttled to `headPublishInterval` to avoid 60Hz
         /// SwiftUI re-renders.

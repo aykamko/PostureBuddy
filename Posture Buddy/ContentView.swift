@@ -452,6 +452,7 @@ struct ContentView: View {
             let bubbleW = ScoreBubble.circleSize
             let bubbleH = ScoreBubble.totalHeight
             let tailGap: CGFloat = 4   // small visual gap between tail tip and head
+            let buddyXOffset: CGFloat = 5  // nudge the bubble right of head center
 
             // Camera-view position: top-left of the safe area, well clear of
             // the status bar / Dynamic Island. `max(...)` constrains the
@@ -465,9 +466,11 @@ struct ContentView: View {
             // at ~22% from screen top while we wait for the first frame.
             let buddyCenter: CGPoint = {
                 if let head = headScreenPosition {
-                    return CGPoint(x: head.x, y: head.y - bubbleH / 2 - tailGap)
+                    return CGPoint(x: head.x + buddyXOffset,
+                                   y: head.y - bubbleH / 2 - tailGap)
                 }
-                return CGPoint(x: geo.size.width / 2, y: geo.size.height * 0.22)
+                return CGPoint(x: geo.size.width / 2 + buddyXOffset,
+                               y: geo.size.height * 0.22)
             }()
 
             ScoreBubble(
