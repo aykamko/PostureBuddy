@@ -85,36 +85,46 @@ for col in list(bpy.data.collections):
     if not col.objects and not col.children:
         bpy.data.collections.remove(col)
 
-# Bake a per-vertex "head mask" color attribute so the Swift shader can tint
-# the head without needing bone-weight data. R channel = weight to the Head
-# vertex group (1.0 on pure head verts, 0.0 elsewhere, smooth in-between).
+# Split the head off of BodyMesh into its own HeadMesh with a dedicated
+# material instance, so Swift can tint the head's diffuse directly without
+# any shader-modifier tricks. Vertices selected via the `Head` vertex group.
 body_obj = bpy.data.objects.get('BodyMesh')
 if body_obj is not None:
-    body_mesh = body_obj.data
     head_vg = body_obj.vertex_groups.get('Head')
     if head_vg is None:
-        print("WARN: Head vertex group not found; skipping head-mask bake")
+        print("WARN: Head vertex group not found; skipping head split")
     else:
-        # Replace any prior attribute.
-        existing = body_mesh.color_attributes.get('HeadMask')
-        if existing is not None:
-            body_mesh.color_attributes.remove(existing)
-        attr = body_mesh.color_attributes.new(
-            name='HeadMask', type='FLOAT_COLOR', domain='POINT'
+        bpy.context.view_layer.objects.active = body_obj
+        for o in bpy.context.view_layer.objects:
+            o.select_set(False)
+        body_obj.select_set(True)
+        if bpy.context.object.mode != 'EDIT':
+            bpy.ops.object.mode_set(mode='EDIT')
+        bpy.ops.mesh.select_all(action='DESELECT')
+        body_obj.vertex_groups.active_index = head_vg.index
+        bpy.ops.object.vertex_group_select()
+        bpy.ops.mesh.separate(type='SELECTED')
+        bpy.ops.object.mode_set(mode='OBJECT')
+
+        # Separation creates a new object named `BodyMesh.001`; pick it up
+        # and rename to `HeadMesh`.
+        head_obj = next(
+            (o for o in bpy.data.objects
+             if o.type == 'MESH' and o.name != 'BodyMesh'
+                and o.name.startswith('BodyMesh')),
+            None,
         )
-        head_count = 0
-        for i, v in enumerate(body_mesh.vertices):
-            w = 0.0
-            for g in v.groups:
-                if g.group == head_vg.index:
-                    w = g.weight
-                    break
-            if w > 0:
-                head_count += 1
-            attr.data[i].color = (w, 0.0, 0.0, 1.0)
-        # Make it the active color so USD exports it as displayColor primvar.
-        body_mesh.color_attributes.active_color = attr
-        print(f"Baked HeadMask color attribute: {head_count} verts with nonzero head weight")
+        if head_obj is None:
+            print("WARN: head separation didn't produce a new object")
+        else:
+            head_obj.name = 'HeadMesh'
+            # Duplicate the material so tinting the head doesn't affect body.
+            if head_obj.data.materials:
+                mat_copy = head_obj.data.materials[0].copy()
+                mat_copy.name = 'HeadMaterial'
+                head_obj.data.materials[0] = mat_copy
+            print(f"Split off HeadMesh: {len(head_obj.data.vertices)} verts, "
+                  f"BodyMesh remaining {len(body_obj.data.vertices)} verts")
 
 print("\n=== scene before export ===")
 for o in bpy.data.objects:
