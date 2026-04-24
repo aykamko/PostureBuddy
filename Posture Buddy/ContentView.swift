@@ -80,9 +80,11 @@ struct ContentView: View {
             .animation(.easeInOut(duration: 0.2), value: calibration.instruction)
             .animation(.easeInOut(duration: 0.2), value: showTrackingFailedAlert)
             .animation(.easeInOut(duration: Self.cameraAnimationDuration), value: cameraMinimized)
-            // Smooth out the 20 Hz head-position publishes from the SCNView so
-            // the score bubble follows the head without per-tick steps.
-            .animation(.linear(duration: 0.06), value: headScreenPosition)
+            // No SwiftUI animation on `headScreenPosition` — it's published
+            // ~60 Hz from the SCN render loop, in lock-step with the bone
+            // transform that's actually drawn. Adding a SwiftUI ease on top
+            // would just put the bubble one ease-duration behind the head.
+            .animation(nil, value: headScreenPosition)
             // Drives PostureBuddy3DView's slouch animation. 0.4s feels natural
             // for body motion (slower than the snappy 0.2s state changes).
             .animation(.easeInOut(duration: 0.4), value: poseEstimator.currentPose?.score?.value)

@@ -189,17 +189,21 @@ struct PostureBuddy3DView: UIViewRepresentable {
         /// HeadMesh node) is what makes the anchor *animated* — the mesh's
         /// own bounding box doesn't update with skinning.
         weak var headBone: SCNNode?
-        /// Distance in bone-local units from the Head bone's origin (head/
-        /// neck base) to the top of the head sphere. Empirical for the
-        /// current rig — Blender bones extend along their +Y axis by
-        /// convention.
-        static let headTopOffset: Float = 0.8
+        /// Distance in bone-local units from the Head bone's origin to the
+        /// top of the head sphere. Empirical for the current rig — Blender
+        /// bones extend along their +Y axis by convention. 0.5 is the sweet
+        /// spot where the bubble's tail tip sits just above the head crown.
+        static let headTopOffset: Float = 0.5
         /// Where to publish the projected head position (set from updateUIView
         /// each pass). Throttled to `headPublishInterval` to avoid 60Hz
         /// SwiftUI re-renders.
         var headScreenBinding: Binding<CGPoint?>?
         private var lastHeadPublishTime: TimeInterval = 0
-        private let headPublishInterval: TimeInterval = 1.0 / 20.0  // 20 Hz
+        // ~60 Hz: publish on every render frame so the bubble stays in lock-
+        // step with the rendered head. Combined with no SwiftUI animation on
+        // the binding, this eliminates the ~110 ms chase lag we'd otherwise
+        // see (50 ms throttle + 60 ms ease).
+        private let headPublishInterval: TimeInterval = 1.0 / 60.0
 
         func renderer(_ renderer: SCNSceneRenderer, updateAtTime time: TimeInterval) {
             let dt = lastTick == 0 ? 0 : (time - lastTick)

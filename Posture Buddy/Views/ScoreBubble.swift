@@ -41,6 +41,18 @@ struct ScoreBubble: View {
                 .opacity(tailVisible ? 1 : 0)
         }
         .frame(width: Self.circleSize, height: Self.totalHeight)
+        // 3pt of breathing room around the bubble before the offscreen Metal
+        // buffer is sized — without this the Circle's stroke (which extends
+        // ±2.5pt outside the circle path) gets clipped at the buffer edge,
+        // leaving rough ring edges. The padding expands the bbox by 3pt on
+        // every side; the bubble's geometric center is unchanged so external
+        // `.position()` math stays correct.
+        .padding(3)
+        // Coalesce shapes + text into one Metal layer so position animations
+        // transform them as a single unit. Without drawingGroup, SwiftUI
+        // renders Text into its own backing store that lags behind the rim
+        // during fast motion (slouch tilts, etc.).
+        .drawingGroup()
     }
 
     private var label: String {
