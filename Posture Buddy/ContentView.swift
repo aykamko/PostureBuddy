@@ -58,6 +58,12 @@ struct ContentView: View {
     @State private var modelOffset: CGSize = .zero
     @State private var modelOffsetAtStart: CGSize = .zero
 
+    /// Where the buddy's head currently projects on screen — published from
+    /// `PostureBuddy3DView`'s renderer delegate. Drives the score-bubble
+    /// anchor when the camera is minimized. Nil before the SceneKit view has
+    /// posted its first frame.
+    @State private var headScreenPosition: CGPoint? = nil
+
     private let trackingTimeoutSeconds: Double = 45
     private let minimizeStartDelay: Duration = .seconds(3)
     private static let cameraAnimationDuration: Double = 0.6
@@ -74,6 +80,9 @@ struct ContentView: View {
             .animation(.easeInOut(duration: 0.2), value: calibration.instruction)
             .animation(.easeInOut(duration: 0.2), value: showTrackingFailedAlert)
             .animation(.easeInOut(duration: Self.cameraAnimationDuration), value: cameraMinimized)
+            // Smooth out the 20 Hz head-position publishes from the SCNView so
+            // the score bubble follows the head without per-tick steps.
+            .animation(.linear(duration: 0.06), value: headScreenPosition)
             // Drives PostureBuddy3DView's slouch animation. 0.4s feels natural
             // for body motion (slower than the snappy 0.2s state changes).
             .animation(.easeInOut(duration: 0.4), value: poseEstimator.currentPose?.score?.value)
@@ -151,7 +160,8 @@ struct ContentView: View {
                     pitchDeg: modelPitch,
                     rollDeg: modelRoll,
                     scale: modelScale,
-                    translation: modelOffset
+                    translation: modelOffset,
+                    headScreenPosition: $headScreenPosition
                 )
                 .ignoresSafeArea()
                 .rotatedIfUpsideDown(isUpsideDown)
@@ -164,32 +174,25 @@ struct ContentView: View {
             }
 
             if !hideUI {
+                scoreBubbleLayer
+            }
+
+            if !hideUI {
             VStack {
                 HStack {
-                    ScoreHUDView(score: poseEstimator.currentPose?.score,
-                                 isCalibrated: poseEstimator.isCalibrated)
-                        .padding()
                     Spacer()
-                    // Top-right: small circular refresh button to start a
-                    // recalibration. Only shown once tracking is live so it
-                    // doesn't compete with the big initial-setup CTA below.
-                    if poseEstimator.isCalibrated {
-                        Button {
-                            calibration.start(
-                                poseEstimator: poseEstimator,
-                                soundCoach: soundCoach,
-                                notificationManager: notificationManager
-                            )
-                        } label: {
-                            Image(systemName: "arrow.clockwise")
-                                .font(.title3.weight(.semibold))
-                                .foregroundStyle(.white)
-                                .frame(width: 44, height: 44)
-                                .background(Circle().fill(.white.opacity(0.16)))
-                                .overlay(Circle().stroke(.white.opacity(0.3), lineWidth: 1))
-                        }
-                        .padding(.trailing, 16)
-                        .padding(.top, 8)
+                    // Top-right: single menu containing the Recalibrate
+                    // action (post-calibration) and the debug toggles
+                    // (#if DEBUG). The button is hidden entirely when there
+                    // would be no menu items — i.e. release builds before
+                    // calibration has run. The score bubble (separate
+                    // floating layer) animates in from the buddy's head
+                    // when the camera is full-screen and lands just to the
+                    // left of this menu.
+                    if shouldShowTopMenu {
+                        topRightMenu
+                            .padding(.trailing, 16)
+                            .padding(.top, 8)
                     }
                 }
                 Spacer()
@@ -253,35 +256,9 @@ struct ContentView: View {
             }
 
             #if DEBUG
-            // Debug menu (gear icon, bottom-left) bundles Hide UI + the
-            // skeleton-overlay toggle. Wrapped in `#if DEBUG` so the menu and
-            // its state changes are stripped from Release builds entirely;
-            // the underlying state vars remain (defaulted false) so the
-            // existing conditionals downstream just take their non-debug
-            // path.
-            VStack {
-                Spacer()
-                HStack {
-                    Menu {
-                        Toggle("Hide UI", isOn: $hideUI)
-                        Toggle("Skeleton overlay", isOn: $showDebugOverlay)
-                    } label: {
-                        Image(systemName: "gearshape.fill")
-                            .font(.title3)
-                            .foregroundStyle(.white.opacity(0.85))
-                            .frame(width: 40, height: 40)
-                            .background(Circle().fill(.black.opacity(0.45)))
-                            .overlay(Circle().stroke(.white.opacity(0.35), lineWidth: 1))
-                    }
-                    .padding(.leading, 16)
-                    .padding(.bottom, 16)
-                    Spacer()
-                }
-            }
-            .rotatedIfUpsideDown(isUpsideDown)
-
             // Axis knobs shown in Hide-UI mode for tweaking the 3D view.
-            // Same #if DEBUG fence — release builds never enter Hide UI mode.
+            // Wrapped in `#if DEBUG` — release builds never enter Hide UI
+            // mode (the toggle lives in the top-right menu's debug section).
             if hideUI {
                 VStack {
                     Spacer()
@@ -424,6 +401,97 @@ struct ContentView: View {
             .onTapGesture { toggleCameraIfAllowed() }
         }
         .ignoresSafeArea()
+    }
+
+    /// Top-right menu: bundles the Recalibrate action + (in Debug builds)
+    /// the Hide UI + skeleton-overlay toggles into one tappable button. Sized
+    /// generously (60pt) so it's easy to hit without stealing visual weight
+    /// from the score HUD on the opposite corner.
+    @ViewBuilder
+    private var topRightMenu: some View {
+        Menu {
+            if poseEstimator.isCalibrated {
+                Button {
+                    calibration.start(
+                        poseEstimator: poseEstimator,
+                        soundCoach: soundCoach,
+                        notificationManager: notificationManager
+                    )
+                } label: {
+                    Label("Recalibrate", systemImage: "arrow.clockwise")
+                }
+            }
+            #if DEBUG
+            Section("Debug") {
+                Toggle("Hide UI", isOn: $hideUI)
+                Toggle("Skeleton overlay", isOn: $showDebugOverlay)
+            }
+            #endif
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.title.weight(.bold))
+                .foregroundStyle(.white)
+                .frame(width: 60, height: 60)
+                .background(Circle().fill(.white.opacity(0.16)))
+                .overlay(Circle().stroke(.white.opacity(0.3), lineWidth: 1))
+        }
+    }
+
+    /// Floating score readout. In buddy view (camera minimized) it hovers
+    /// above the buddy's head — anchored to the actual projected head
+    /// position from `PostureBuddy3DView`. In camera view it slides to the
+    /// top-left of the safe area (no tail). The body-level
+    /// `.animation(value: cameraMinimized)` interpolates the position smoothly.
+    @ViewBuilder
+    private var scoreBubbleLayer: some View {
+        GeometryReader { geo in
+            let safeTop = geo.safeAreaInsets.top
+            let safeLeading = geo.safeAreaInsets.leading
+            let bubbleW = ScoreBubble.circleSize
+            let bubbleH = ScoreBubble.totalHeight
+            let tailGap: CGFloat = 4   // small visual gap between tail tip and head
+
+            // Camera-view position: top-left of the safe area, well clear of
+            // the status bar / Dynamic Island. `max(...)` constrains the
+            // bbox top below the safe-area boundary so the bubble sits
+            // entirely inside the safe area.
+            let topLeftCenterX = safeLeading + 16 + bubbleW / 2
+            let topLeftCenterY = safeTop + 8 + bubbleH / 2
+
+            // Buddy-view position: anchored to the actual buddy head if the
+            // SCNView has reported a position; otherwise a sensible fallback
+            // at ~22% from screen top while we wait for the first frame.
+            let buddyCenter: CGPoint = {
+                if let head = headScreenPosition {
+                    return CGPoint(x: head.x, y: head.y - bubbleH / 2 - tailGap)
+                }
+                return CGPoint(x: geo.size.width / 2, y: geo.size.height * 0.22)
+            }()
+
+            ScoreBubble(
+                score: poseEstimator.currentPose?.score,
+                isCalibrated: poseEstimator.isCalibrated,
+                tailVisible: cameraMinimized
+            )
+            .position(cameraMinimized
+                      ? buddyCenter
+                      : CGPoint(x: topLeftCenterX, y: topLeftCenterY))
+        }
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
+        .rotatedIfUpsideDown(isUpsideDown)
+    }
+
+    /// `true` when the top-right menu has at least one item to show — so we
+    /// don't render an empty popup-trigger in release builds before the user
+    /// has calibrated.
+    private var shouldShowTopMenu: Bool {
+        if poseEstimator.isCalibrated { return true }
+        #if DEBUG
+        return true
+        #else
+        return false
+        #endif
     }
 
     /// Toggle the camera surface state. Only meaningful once we have baselines

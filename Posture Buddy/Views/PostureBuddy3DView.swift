@@ -28,6 +28,12 @@ struct PostureBuddy3DView: UIViewRepresentable {
     var scale: Double = 1.0
     var translation: CGSize = .zero
 
+    /// Output: where (in the SCNView's local point coords) the top of the
+    /// buddy's head currently projects on screen. ContentView reads this to
+    /// anchor the score bubble's tail to the head. Throttled to ~20 Hz inside
+    /// the Coordinator so SwiftUI doesn't re-evaluate the body 60×/sec.
+    var headScreenPosition: Binding<CGPoint?>? = nil
+
     /// Container's base (mirror-off) scale factor. Referenced by the debug
     /// transform path so "scale × 1.0" matches normal framing. Tuned for the
     /// current `stickman.usdz` export (bounds ~1.8w × 2.3h × 1.2d pre-scale).
@@ -54,7 +60,7 @@ struct PostureBuddy3DView: UIViewRepresentable {
     /// Extra fixed offset applied to the auto-centered buddy position, in
     /// world units. -Z is screen-right with the current camera. Use a small
     /// negative value to nudge the figure off-center toward the right edge.
-    private static let viewOffset = SIMD3<Float>(0, 0, -0.09)
+    private static let viewOffset = SIMD3<Float>(0, -0.2, -0.09)
 
     func makeUIView(context: Context) -> SCNView {
         let view = SCNView()
@@ -84,6 +90,9 @@ struct PostureBuddy3DView: UIViewRepresentable {
         // frame; setting it directly here would jump on every score update.
         let ratio = Self.slouchRatio(for: score)
         context.coordinator.targetSceneTime = ratio * context.coordinator.animationDuration
+        // Re-bind every update so SwiftUI re-creating the view doesn't strand
+        // the Coordinator with a stale binding.
+        context.coordinator.headScreenBinding = headScreenPosition
 
         // Mirror + debug transform: instant. The mirror flip is visually snappy
         // (CLAUDE.md: "instant flip, otherwise the mirror crossfade is
@@ -173,6 +182,25 @@ struct PostureBuddy3DView: UIViewRepresentable {
         /// matching the ease feel of the body-level animation modifiers.
         let smoothingRate: Double = 5.0
 
+        /// Head BONE — we project its animated world position (+ a local
+        /// offset along bone-local +Y) to screen space each frame so the
+        /// score bubble's tail can follow the head as it tilts forward
+        /// during the slouch animation. Using the bone (rather than the
+        /// HeadMesh node) is what makes the anchor *animated* — the mesh's
+        /// own bounding box doesn't update with skinning.
+        weak var headBone: SCNNode?
+        /// Distance in bone-local units from the Head bone's origin (head/
+        /// neck base) to the top of the head sphere. Empirical for the
+        /// current rig — Blender bones extend along their +Y axis by
+        /// convention.
+        static let headTopOffset: Float = 0.8
+        /// Where to publish the projected head position (set from updateUIView
+        /// each pass). Throttled to `headPublishInterval` to avoid 60Hz
+        /// SwiftUI re-renders.
+        var headScreenBinding: Binding<CGPoint?>?
+        private var lastHeadPublishTime: TimeInterval = 0
+        private let headPublishInterval: TimeInterval = 1.0 / 20.0  // 20 Hz
+
         func renderer(_ renderer: SCNSceneRenderer, updateAtTime time: TimeInterval) {
             let dt = lastTick == 0 ? 0 : (time - lastTick)
             lastTick = time
@@ -188,6 +216,26 @@ struct PostureBuddy3DView: UIViewRepresentable {
             if let mat = headMaterial, animationDuration > 0 {
                 let ratio = max(0, min(1, renderer.sceneTime / animationDuration))
                 mat.diffuse.contents = headTintUIColor(ratio: ratio)
+            }
+
+            // Project the Head bone's animated world position (with a local
+            // +Y offset to land on top of the head sphere) to screen coords
+            // each tick. Reading from `bone.presentation` picks up the live
+            // animated transform — that's what makes the bubble follow the
+            // head forward as the rig slouches.
+            if let bone = headBone,
+               let scnView = renderer as? SCNView,
+               time - lastHeadPublishTime >= headPublishInterval {
+                let topLocal = SIMD3<Float>(0, Self.headTopOffset, 0)
+                let topWorld = bone.presentation.simdConvertPosition(topLocal, to: nil)
+                let proj = scnView.projectPoint(SCNVector3(topWorld.x, topWorld.y, topWorld.z))
+                let pt = CGPoint(x: CGFloat(proj.x), y: CGFloat(proj.y))
+                lastHeadPublishTime = time
+                if let binding = headScreenBinding {
+                    DispatchQueue.main.async {
+                        binding.wrappedValue = pt
+                    }
+                }
             }
         }
 
@@ -315,6 +363,36 @@ struct PostureBuddy3DView: UIViewRepresentable {
             coord.headMaterial = headMat
         } else {
             Log.line("[Buddy3D]", "WARN: HeadMesh material not found; head tint disabled")
+        }
+
+        // Cache the Head BONE so the renderer can project its animated
+        // world position to screen each frame for the score-bubble anchor.
+        // Walk every skinner in the scene and pick the bone literally named
+        // "Head"; if not found, log "head"-containing candidates so we know
+        // what to look for.
+        var bestSkinner: SCNSkinner?
+        var bestCount = 0
+        func walkSkinners(_ n: SCNNode) {
+            if let s = n.skinner, s.bones.count > bestCount {
+                bestSkinner = s
+                bestCount = s.bones.count
+            }
+            for c in n.childNodes { walkSkinners(c) }
+        }
+        walkSkinners(scene.rootNode)
+        if let skinner = bestSkinner {
+            if let head = skinner.bones.first(where: { $0.name == "Head" }) {
+                coord.headBone = head
+                Log.line("[Buddy3D]", "head bone cached: \(head.name ?? "?")")
+            } else {
+                let candidates = skinner.bones.compactMap(\.name)
+                    .filter { $0.lowercased().contains("head") }
+                Log.line("[Buddy3D]",
+                    "WARN: Head bone not found among \(skinner.bones.count) bones. "
+                    + "Head-ish candidates: \(candidates)")
+            }
+        } else {
+            Log.line("[Buddy3D]", "WARN: no skinner found; bubble anchor disabled")
         }
     }
 
