@@ -68,8 +68,10 @@ struct PostureBuddy3DView: UIViewRepresentable {
         // Custom gestures are handled at the SwiftUI layer; SceneKit's built-in
         // camera control would fight them.
         view.allowsCameraControl = false
-        // SceneKit only needs to redraw when we mutate state; no per-frame animation.
-        view.rendersContinuously = false
+        // We need every-frame ticks to ease sceneTime toward its target in
+        // the Coordinator's renderer delegate (smooths score-driven slouch).
+        view.rendersContinuously = true
+        view.delegate = context.coordinator
 
         if let scene = Self.makeScene() {
             view.scene = scene
@@ -80,17 +82,11 @@ struct PostureBuddy3DView: UIViewRepresentable {
     }
 
     func updateUIView(_ view: SCNView, context: Context) {
-        // Posture score → animation scrub. The Blender clip runs from
-        // "upright sit" at frame 0 to "fully slouched" at frame 50; we map
-        // current posture to a point along that timeline. All animations were
-        // flipped to `usesSceneTimeBase = true` at load, so setting
-        // `view.sceneTime` is what advances the skin deformation.
+        // Posture score → animation scrub TARGET. The Coordinator's renderer
+        // delegate eases the actual `view.sceneTime` toward this target each
+        // frame; setting it directly here would jump on every score update.
         let ratio = Self.slouchRatio(for: score)
-        let target = ratio * context.coordinator.animationDuration
-        Log.line("[Buddy3D]", String(format: "score=%@ ratio=%.2f sceneTime=%.2f/%.2f",
-            score?.value.description ?? "nil", ratio, target, context.coordinator.animationDuration))
-        view.sceneTime = target
-        view.rendersContinuously = false
+        context.coordinator.targetSceneTime = ratio * context.coordinator.animationDuration
 
         // Toggle debug bone markers. The helper walks the tree once per
         // update; cheap enough at 30 or so markers and avoids caching state
@@ -164,13 +160,34 @@ struct PostureBuddy3DView: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
-    final class Coordinator {
+    /// Coordinator doubles as the SCNView delegate so we can smoothly chase a
+    /// target sceneTime each render frame, instead of slamming sceneTime to a
+    /// new value every time SwiftUI re-runs `updateUIView` (which fires on
+    /// step-wise ~10 Hz score updates and reads as choppy).
+    final class Coordinator: NSObject, SCNSceneRendererDelegate {
         /// Longest duration across all skeletal animations found at load time.
         /// sceneTime ∈ [0, animationDuration] scrubs the slouch clip.
         var animationDuration: TimeInterval = 0
         /// The scene-tree ancestor we rotate 180° around when mirroring.
         var flipNode: SCNNode?
         var flipRest = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+
+        /// sceneTime we're easing toward (set in updateUIView from score).
+        var targetSceneTime: TimeInterval = 0
+        /// Render-loop tick from the previous callback for dt.
+        var lastTick: TimeInterval = 0
+        /// Rate constant in 1/seconds. ~5 reaches 80% of target in ~0.32 s,
+        /// matching the ease feel of the body-level animation modifiers.
+        let smoothingRate: Double = 5.0
+
+        func renderer(_ renderer: SCNSceneRenderer, updateAtTime time: TimeInterval) {
+            let dt = lastTick == 0 ? 0 : (time - lastTick)
+            lastTick = time
+            guard dt > 0 else { return }
+            let current = renderer.sceneTime
+            let alpha = 1 - exp(-smoothingRate * dt)
+            renderer.sceneTime = current + (targetSceneTime - current) * alpha
+        }
     }
 
     // MARK: - Scene construction
