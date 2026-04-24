@@ -2,15 +2,16 @@
 # Bake the latest .blend → Posture Buddy/stickman.usdz + a preview PNG.
 # Usage: ./tools/stickman/export.sh [optional/path/to.blend]
 #
-# Default source is the user-baked v3 file. Override by passing a different
-# .blend path as the first argument.
+# Default source is `assets/posture_buddy_v3_baked.blend` (committed to the
+# repo). Override by passing a different .blend path as the first argument.
 
 set -euo pipefail
 
 BLENDER=/Applications/Blender.app/Contents/MacOS/Blender
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PY="$SCRIPT_DIR/export_v2.py"
-BLEND="${1:-$HOME/Downloads/GameReadyStickmanBlenderRig/posture_buddy_v3_baked.blend}"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+PY="$SCRIPT_DIR/export.py"
+BLEND="${1:-$REPO_ROOT/assets/posture_buddy_v3_baked.blend}"
 
 if [[ ! -x "$BLENDER" ]]; then
     echo "ERROR: Blender not found at $BLENDER" >&2

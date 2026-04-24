@@ -103,18 +103,35 @@ Workflow:
 4. Replace files in `Posture Buddy/VoicePrompts/`. Filenames must match `VoicePrompt.rawValue` exactly.
 
 ### Battery: drop the video preview post-calibration
-- Once `poseEstimator.isCalibrated` becomes true, `ContentView` waits 3 s, fades a black overlay over the preview in ~1 s, then *removes* the `CameraPreviewView` from the view hierarchy. That deallocates the `AVCaptureVideoPreviewLayer`, which is the main GPU consumer — the capture session and `PoseEstimator` keep running unchanged, so pose detection and scoring are unaffected. By default the **Posture Buddy** mascot (`PostureBuddyView`) renders above the dimmer; the on-screen *Debug* toggle below CalibrateButton swaps it for `PostureOverlayView` (skeleton + face landmarks). Either way the upper-layer visual stays visible after the camera fade.
+- Once `poseEstimator.isCalibrated` becomes true, `ContentView` waits 3 s, fades a dark slate overlay (RGB 36/37/43, see `ContentView.backdropSlate`) over the preview in ~1 s, then *removes* the `CameraPreviewView` from the view hierarchy. That deallocates the `AVCaptureVideoPreviewLayer`, which is the main GPU consumer — the capture session and `PoseEstimator` keep running unchanged, so pose detection and scoring are unaffected. By default the **Posture Buddy** mascot (`PostureBuddy3DView`, a SceneKit 3D scene) renders above the dimmer; the on-screen *Debug* toggle below CalibrateButton swaps it for `PostureOverlayView` (skeleton + face landmarks). The *Bones* toggle next to Debug overlays per-joint markers on the 3D rig for diagnosis (off by default). Either way the upper-layer visual stays visible after the camera fade.
 
-### Posture Buddy mascot
-The friendly side-profile caricature that's the app's primary user-facing visual. Lives at `Views/PostureBuddyView.swift`. Implementation notes:
-- Built from SwiftUI primitives (Path / Capsule / Circle / Rectangle) inside a fixed 220×260 inner coordinate space; every shape uses `.position(x:y:)` so the head's rotation anchor (the shoulder pivot, canvas (35, 95)) stays deterministic across renders.
-- Static layers (white/low-opacity): chair seat, chair back, desk, desk leg, lower body limbs (single stroked Path with round caps for ball-joint look), torso, arm, hand. Pivoting layer: head + neck + nose nub, wrapped in an 80×90 container that gets `.rotationEffect(.degrees(leanDegrees), anchor: UnitPoint(x: 0.5, y: 1.0))`.
-- **Lean math**: `PostureBuddyView.leanDegrees(for: PostureScore?)` — pure function. Nil/score ≥ 90 → 0°, ≤ 30 → 35°, linear in between. The score is already EMA-smoothed in `PoseEstimator`; smoothness in the UI comes from the body-level `.animation(.easeInOut(duration: 0.4), value: score?.value)` modifier in `ContentView`, not from state inside the view.
-- **Color cue**: head + nose track `score?.grade.swiftUIColor ?? .white` (green / yellow / red). This deliberately matches the `ScoreHUDView` ring tint — both surfaces should "agree" at a glance. Don't refactor as redundant.
-- **Mirroring**: the buddy faces the same direction the user appears to face in the (mirrored) camera preview. The trigger condition is `dominantEar == .left` → `.scaleEffect(x: -1, y: 1)`, which is **empirically inverted** from the naive "right-ear-visible-means-camera-on-right" reading. The reason: Vision's anatomical left/right ear labels on the `.leftMirrored` front-camera buffer don't line up with the user's true anatomy in the way you'd naively expect. The mapping was determined by trying both signs and picking the one whose visual matched the user's mirrored reflection. Mirroring also flips the head's clockwise pivot to counter-clockwise visually, so the head still leans toward the desk in either orientation. Pre-calibration / nil → default right-facing.
-- **`PoseEstimator.dominantEar: EarSide?`** is a `@Published` shadow of `PostureBaselines.dominantEar` — the baselines struct is the persisted authority; the published property exists so SwiftUI can observe mirroring changes. Synced in `init` (load), `calibrate()` (commit), `resetCalibration()` (clear). The `dominantEar` change is *not* animated (`.animation(nil, value: dominantEar)` in ContentView) — instant flip, otherwise the mirror crossfade is unsightly.
-- Reset path: when `isCalibrated` goes false (user taps Recalibrate), the preview is re-added to the hierarchy immediately and the dimmer fades off over 1 s so you can see yourself during the new calibration flow. Scene-phase changes (background/foreground) do **not** touch the fade state — returning from background on a calibrated session keeps the preview hidden.
-- The dimmer sits between the camera preview and the skeleton layer in the `ZStack`, so slouching feedback stays crisp on top of a plain black background.
+### Posture Buddy mascot (3D SceneKit)
+The app's primary user-facing visual. Lives at `Views/PostureBuddy3DView.swift` — a `UIViewRepresentable` wrapping an `SCNView`. There's also a legacy 2D SwiftUI version at `Views/PostureBuddyView.swift`; it isn't referenced from ContentView and can be retired when convenient.
+
+#### Asset pipeline
+- Source `.blend`s live in `assets/` at the repo root: `posture_buddy_v3_baked.blend` (rigged + animated stickman, 0 = upright, 50 = fully slouched) and `chairoff.blend` (static swivel chair mesh).
+- `tools/stickman/export.sh` → `tools/stickman/export.py`: headless Blender bake that repoints the body mesh's armature modifier at `Ctrl_Rig`, strips debug widgets, appends + positions the chair, splits the head off into its own `HeadMesh` with a dedicated material, and USD-exports the 0–50 frame animation. Produces `Posture Buddy/stickman.usdz` (the shipped asset) + `Posture Buddy/stickman_preview.png` (an Eevee render of frame 0 so we can sanity-check pose/chair placement without launching the app). See `tools/stickman/README.md` for the full pipeline.
+
+#### Scene / rendering
+- SceneKit imports `stickman.usdz`, then `PostureBuddy3DView.makeScene` wraps the imported tree in two containers:
+  - `buddyAxisFix`: rotates −90° around X to convert Blender's Z-up local space to SceneKit's Y-up world.
+  - `buddyContainer`: applied every frame with the view rotation (ear-mirror × default 3/4 isometric × optional Hide-UI debug knobs), plus an auto-center offset that puts the rotated bounding-box midpoint at the camera's look-at.
+- **Default view**: 3/4 isometric — yaw/pitch/roll constants `defaultYawDeg / defaultPitchDeg / defaultRollDeg` (−136 / −11 / +11). A small +Z offset (`viewOffset`) pushes the figure slightly off-center. Camera is at `(3.75, cameraLookAt.y, 0)` with a 45° FOV.
+- **Mirroring**: the buddy faces the same direction the user appears to face in the (mirrored) camera preview. The trigger condition is `dominantEar == .left` → 180° rotation around Y on the container, which is **empirically inverted** from the naive "right-ear-visible-means-camera-on-right" reading. The reason: Vision's anatomical left/right ear labels on the `.leftMirrored` front-camera buffer don't line up with the user's true anatomy in the way you'd naively expect. The mapping was determined by trying both signs and picking the one whose visual matched the user's mirrored reflection. `dominantEar` change is applied instantly (no animation) — otherwise the mirror flip produces an unsightly crossfade.
+- **`PoseEstimator.dominantEar: EarSide?`** is a `@Published` shadow of `PostureBaselines.dominantEar`; the baselines struct is the persisted authority and the published property exists so SwiftUI can observe mirroring changes.
+
+#### Slouch animation
+- The Blender clip is 0–50 frames (≈2.08 s at 24 fps) from upright to fully slouched. At load, `inventoryAnimations` walks the scene, sets `usesSceneTimeBase = true` on every imported `SCNAnimationPlayer`, calls `play()`, and records the longest duration on the Coordinator.
+- `updateUIView` computes `slouchRatio(for: score) ∈ [0, 1]` from the posture score (ramp: score ≥ 90 → 0, ≤ 30 → 1) and stores `targetSceneTime = ratio × duration` on the Coordinator.
+- The Coordinator is also the `SCNSceneRendererDelegate`. Its `renderer(_:updateAtTime:)` callback eases the view's `sceneTime` toward `targetSceneTime` each frame (exp-smooth with a ~5 rate-per-second, ≈80% closure in 0.32 s). Setting `sceneTime` directly in `updateUIView` was visibly choppy because SwiftUI re-runs it at the score's update cadence (~10 Hz); the per-frame delegate interpolation makes the animation smooth.
+- `view.rendersContinuously = true` so the delegate ticks every frame.
+
+#### Head color cue
+- Head is split off into its own `HeadMesh` with a dedicated material during the Blender export. The Coordinator caches that material and flips `material.diffuse.contents` each render tick based on the current `sceneTime` ratio: white → yellow at mid-slouch → red at full slouch. The body stays white.
+- Shader modifiers were tried first (varyings and texcoord-passed masks); both paths either compiled as magenta or delivered the mask uniformly across the whole mesh on this Metal-backed SceneKit stack. Splitting the mesh and tinting the second material is what shipped.
+
+#### Hide-UI debug mode
+- Bottom-left "Hide UI" toggle dims everything but the 3D view. Three `AxisKnob`s in the bottom-right scrub yaw/pitch/roll of the container (press + drag vertically). Pan on the scene translates, pinch zooms. Reset returns to the defaults (`defaultYaw/Pitch/Roll`, scale 1, offset 0). The knobs' initial values are seeded from the same defaults so entering Hide-UI doesn't change the rendered view — only the knobs are now movable.
 
 ### Watch companion (haptic feedback)
 - Separate watchOS target: **`Posture Buddy Watch App`**. Three files: `Posture_Buddy_WatchApp.swift` (`@main`), `ContentView.swift` (status view), `WatchPostureReceiver.swift` (`WCSession` delegate + haptic playback).
@@ -179,10 +196,14 @@ Posture Buddy/                          (iOS target)
 ├── SoundEffects.swift                  Synthesized marimba tones + beep pairs
 ├── WatchBridge.swift                   WCSession singleton; sends `.slouch` / `.recovery` haptic events to paired watch
 ├── Log.swift                           Timestamped print helper (HH:mm:ss.SSS); thread-safe DateFormatter under OSAllocatedUnfairLock
+├── stickman.usdz                       Baked buddy+chair 3D asset consumed by PostureBuddy3DView (produced by tools/stickman/export.sh)
+├── stickman_preview.png                Eevee render of frame 0 — quick pose/chair sanity check alongside the USDZ
 ├── Views/                              Leaf SwiftUI views composed by ContentView
 │   ├── ScoreHUDView.swift              108pt circle, color-coded score
 │   ├── CalibrateButton.swift           Capsule button, flips to red "Cancel" while calibrating
-│   ├── PostureBuddyView.swift          The "Posture Buddy" mascot — side-profile caricature; head+neck pivot forward as score drops; mirrored by dominantEar; default after-calibration visual
+│   ├── PostureBuddy3DView.swift        3D SceneKit mascot — loads stickman.usdz, scrubs the baked slouch animation by score, tints HeadMesh white→yellow→red; default after-calibration visual
+│   ├── PostureBuddyView.swift          Legacy 2D SwiftUI mascot (no longer wired up; keep until retired)
+│   ├── AxisKnob.swift                  Press-and-drag vertical slider used by Hide-UI for yaw/pitch/roll knobs
 │   ├── TrackingLoadingView.swift       Spinner + message while pose model is loading
 │   ├── AlertOverlay.swift              Custom modal (native .alert doesn't respect manual rotation)
 │   └── GuidedCalibrationOverlay.swift  Instruction text + big countdown number
@@ -198,6 +219,15 @@ Posture Buddy Watch App/                (watchOS target)
 ├── Posture_Buddy_WatchApp.swift        @main App entry; owns WatchPostureReceiver as @StateObject
 ├── ContentView.swift                   Minimal status view — shows last-received event tag
 └── WatchPostureReceiver.swift          WCSession delegate; plays WKInterfaceDevice haptics on incoming `slouch`/`recovery` events
+
+assets/                                 Source .blend files baked into stickman.usdz
+├── posture_buddy_v3_baked.blend        Rigged + animated stickman (frame 0 upright, frame 50 slouched; pose baked to FK keyframes)
+└── chairoff.blend                      Static swivel chair mesh (CC-BY, Sketchfab)
+
+tools/stickman/                         Blender → USDZ pipeline
+├── export.sh                           Headless wrapper; `./tools/stickman/export.sh [optional .blend]`
+├── export.py                           Repoints armature, appends chair, splits head off into HeadMesh, exports animation, renders preview PNG
+└── README.md                            Full pipeline notes (rig overview, re-export instructions, attribution)
 ```
 
 ## Data Flow
@@ -218,8 +248,8 @@ PoseEstimator.captureOutput (nonisolated, 10 FPS throttled)
     │  exponential smoothing on score (0.8*prev + 0.2*new)
     ▼  Task { @MainActor } publishes DetectedPose (keypoints w/ isStale + faceLandmarks + score)
 ContentView
-    ├── CameraPreviewView        (bottom layer, not rotated; faded out + removed 3 s after calibration)
-    ├── PostureBuddyView | PostureOverlayView    (Debug toggle — default is the Posture Buddy mascot pivoting from score and mirrored by dominantEar; debug shows skeleton + face landmarks)
+    ├── CameraPreviewView        (bottom layer, not rotated; faded out + removed 3 s after calibration; backdrop fades to the slate RGB 36/37/43)
+    ├── PostureBuddy3DView | PostureOverlayView    (Debug toggle — default is the 3D mascot; sceneTime scrubs a baked slouch animation by score, HeadMesh diffuse tints white→yellow→red; debug shows skeleton + face landmarks. Bones toggle overlays per-joint markers on the 3D rig.)
     ├── ScoreHUDView             (108pt circle, color-coded score)
     ├── CalibrateButton / Debug toggle / TrackingLoadingView / GuidedCalibrationOverlay / AlertOverlay
     └── onChange(score) → NotificationManager.update + PostureSoundCoach.update (skips nil scores)
