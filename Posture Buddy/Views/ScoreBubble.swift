@@ -57,7 +57,7 @@ struct ScoreBubble: View {
     }
 
     private var label: String {
-        if let score { return "\(Int(score.value))" }
+        if let score { return "\(Int(score.value.rounded()))" }
         return isCalibrated ? "--" : "·"
     }
 }
