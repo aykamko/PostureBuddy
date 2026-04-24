@@ -171,6 +171,12 @@ struct PostureBuddy3DView: UIViewRepresentable {
         /// The scene-tree ancestor we rotate 180° around when mirroring.
         var flipNode: SCNNode?
         var flipRest = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+        /// BodyMesh geometry for setting the head-tint shader uniforms each
+        /// frame.
+        var bodyGeometry: SCNGeometry?
+        /// Materials on the BodyMesh geometry — shader-modifier uniforms need
+        /// to be set on the material, not the geometry.
+        var bodyMaterials: [SCNMaterial] = []
 
         /// sceneTime we're easing toward (set in updateUIView from score).
         var targetSceneTime: TimeInterval = 0
@@ -187,6 +193,32 @@ struct PostureBuddy3DView: UIViewRepresentable {
             let current = renderer.sceneTime
             let alpha = 1 - exp(-smoothingRate * dt)
             renderer.sceneTime = current + (targetSceneTime - current) * alpha
+
+            // Drive the head tint from the smoothed scene time so color
+            // tracks the visible slouch animation.
+            if animationDuration > 0, !bodyMaterials.isEmpty {
+                let ratio = max(0, min(1, renderer.sceneTime / animationDuration))
+                let tint = headTintColor(ratio: ratio)
+                for mat in bodyMaterials {
+                    mat.setValue(NSValue(scnVector3: tint), forKey: "u_headTint")
+                    mat.setValue(NSNumber(value: ratio),    forKey: "u_tintAmount")
+                }
+            }
+        }
+
+        /// White → yellow at mid-slouch → red at full slouch.
+        private func headTintColor(ratio: Double) -> SCNVector3 {
+            let yellow = SIMD3<Double>(1.0, 0.85, 0.0)
+            let red    = SIMD3<Double>(1.0, 0.20, 0.20)
+            // First half of slouch = approach yellow, second half = yellow→red.
+            let blend: SIMD3<Double>
+            if ratio < 0.5 {
+                blend = yellow
+            } else {
+                let t = (ratio - 0.5) / 0.5
+                blend = yellow * (1 - t) + red * t
+            }
+            return SCNVector3(blend.x, blend.y, blend.z)
         }
     }
 
@@ -269,10 +301,9 @@ struct PostureBuddy3DView: UIViewRepresentable {
     }
 
     /// Wire up the buddyContainer for mirror/scale/debug. Also inventory all
-    /// skeletal animations so we can log duration for debugging. For now we
-    /// let each animation play naturally (no scene-time scrub) — once we
-    /// confirm the imported animation actually deforms the mesh correctly on
-    /// a loop, we'll switch back to sceneTime scrubbing by score.
+    /// skeletal animations so we can log duration for debugging. Attaches the
+    /// head-tint shader modifier to BodyMesh so the head warms toward yellow/
+    /// red as the slouch advances.
     private static func cacheDriveNodes(scene: SCNScene, into coord: Coordinator) {
         if let container = scene.rootNode.childNode(withName: "buddyContainer", recursively: false) {
             coord.flipNode = container
@@ -284,6 +315,70 @@ struct PostureBuddy3DView: UIViewRepresentable {
         coord.animationDuration = longest
         Log.line("[Buddy3D]",
             "animations found: \(count)  longest duration: \(String(format: "%.3f", longest))s")
+
+        // USD imports the skinned mesh as a grandchild of the 'BodyMesh'
+        // group node — look for the first node in the tree that has both a
+        // geometry and a skinner attached.
+        if let geom = firstSkinnedGeometry(in: scene.rootNode) {
+            attachHeadTintShader(to: geom)
+            coord.bodyGeometry = geom
+            coord.bodyMaterials = geom.materials
+        } else {
+            Log.line("[Buddy3D]", "WARN: no skinned geometry found; head tint disabled")
+        }
+    }
+
+    private static func firstSkinnedGeometry(in root: SCNNode) -> SCNGeometry? {
+        if root.skinner != nil, let g = root.geometry { return g }
+        for c in root.childNodes {
+            if let g = firstSkinnedGeometry(in: c) { return g }
+        }
+        return nil
+    }
+
+    /// Two-stage shader modifier:
+    ///   - .geometry: computes a 0..1 mask from the vertex's object-space height
+    ///     (Blender exports Z-up, so model-space `position.z` is vertical), with
+    ///     a smooth ramp picking up only the head sphere.
+    ///   - .surface: mixes the surface diffuse toward `u_headTint` by
+    ///     `u_tintAmount * mask`.
+    /// Coordinator sets both uniforms each frame from the current sceneTime.
+    private static func attachHeadTintShader(to geometry: SCNGeometry) {
+        // Surface-stage modifier that transforms the view-space position back
+        // to object space via `u_inverseModelViewTransform`, then masks by Z
+        // (Blender's up axis for this export). Only head vertices — Z above
+        // the threshold — receive the tint. GLSL-style uniforms (known to
+        // work on this project's Metal-backed SceneKit).
+        // Both the `#pragma varyings` directive and the plain `varying`
+        // keyword compile as magenta in this build (Metal-backed SceneKit on
+        // iOS). Trick: pipe the mask through the first UV set. The geometry
+        // stage writes `_geometry.color.r` into `_geometry.texcoords[0].x`,
+        // which SceneKit already interpolates across fragments and exposes
+        // to the surface stage as `_surface.diffuseTexcoord`. No custom
+        // varying needed. Material has no diffuse texture so we're not
+        // stomping anything useful.
+        let geomMod = """
+        #pragma body
+        _geometry.texcoords[0] = vec2(_geometry.color.r, 0.0);
+        """
+        let surfMod = """
+        uniform vec3  u_headTint;
+        uniform float u_tintAmount;
+
+        #pragma body
+        float mask = _surface.diffuseTexcoord.x;
+        _surface.diffuse.rgb = mix(_surface.diffuse.rgb,
+                                   u_headTint,
+                                   mask * u_tintAmount);
+        """
+        for mat in geometry.materials {
+            mat.shaderModifiers = [
+                .geometry: geomMod,
+                .surface:  surfMod,
+            ]
+            mat.setValue(NSValue(scnVector3: SCNVector3(1, 1, 1)), forKey: "u_headTint")
+            mat.setValue(NSNumber(value: 0.0),                     forKey: "u_tintAmount")
+        }
     }
 
     /// Recursively hide / show any node we added during bone-marker setup

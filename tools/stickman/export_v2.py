@@ -85,6 +85,37 @@ for col in list(bpy.data.collections):
     if not col.objects and not col.children:
         bpy.data.collections.remove(col)
 
+# Bake a per-vertex "head mask" color attribute so the Swift shader can tint
+# the head without needing bone-weight data. R channel = weight to the Head
+# vertex group (1.0 on pure head verts, 0.0 elsewhere, smooth in-between).
+body_obj = bpy.data.objects.get('BodyMesh')
+if body_obj is not None:
+    body_mesh = body_obj.data
+    head_vg = body_obj.vertex_groups.get('Head')
+    if head_vg is None:
+        print("WARN: Head vertex group not found; skipping head-mask bake")
+    else:
+        # Replace any prior attribute.
+        existing = body_mesh.color_attributes.get('HeadMask')
+        if existing is not None:
+            body_mesh.color_attributes.remove(existing)
+        attr = body_mesh.color_attributes.new(
+            name='HeadMask', type='FLOAT_COLOR', domain='POINT'
+        )
+        head_count = 0
+        for i, v in enumerate(body_mesh.vertices):
+            w = 0.0
+            for g in v.groups:
+                if g.group == head_vg.index:
+                    w = g.weight
+                    break
+            if w > 0:
+                head_count += 1
+            attr.data[i].color = (w, 0.0, 0.0, 1.0)
+        # Make it the active color so USD exports it as displayColor primvar.
+        body_mesh.color_attributes.active_color = attr
+        print(f"Baked HeadMask color attribute: {head_count} verts with nonzero head weight")
+
 print("\n=== scene before export ===")
 for o in bpy.data.objects:
     print(f"  {o.type:<10} {o.name!r}")
@@ -99,6 +130,7 @@ bpy.ops.wm.usd_export(
     export_meshes=True,
     export_uvmaps=True,
     export_normals=True,
+    export_mesh_colors=True,
     generate_preview_surface=True,
     root_prim_path='/root',
 )
