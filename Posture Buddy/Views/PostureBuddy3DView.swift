@@ -27,9 +27,6 @@ struct PostureBuddy3DView: UIViewRepresentable {
     var rollDeg: Double = 0
     var scale: Double = 1.0
     var translation: CGSize = .zero
-    /// Show the debug bone markers (small bright spheres at each joint).
-    /// Default off — they're mostly a rig-diagnosis tool.
-    var showBones: Bool = false
 
     /// Container's base (mirror-off) scale factor. Referenced by the debug
     /// transform path so "scale × 1.0" matches normal framing. Tuned for the
@@ -87,13 +84,6 @@ struct PostureBuddy3DView: UIViewRepresentable {
         // frame; setting it directly here would jump on every score update.
         let ratio = Self.slouchRatio(for: score)
         context.coordinator.targetSceneTime = ratio * context.coordinator.animationDuration
-
-        // Toggle debug bone markers. The helper walks the tree once per
-        // update; cheap enough at 30 or so markers and avoids caching state
-        // across re-created Coordinators.
-        if let root = view.scene?.rootNode {
-            Self.setBoneMarkersHidden(on: root, hidden: !showBones)
-        }
 
         // Mirror + debug transform: instant. The mirror flip is visually snappy
         // (CLAUDE.md: "instant flip, otherwise the mirror crossfade is
@@ -267,12 +257,6 @@ struct PostureBuddy3DView: UIViewRepresentable {
         // y ≈ 0.42. Keep axisFix at origin — camera look-at aims at body center.
         axisFix.simdPosition = SIMD3<Float>(0, 0, 0)
 
-        // Debug: attach a bright marker at every bone origin so we can see the
-        // skeleton regardless of mesh occlusion. Remove once the pose + camera
-        // + axes are dialed in.
-        highlightBones(in: scene.rootNode)
-        addLimbTipMarkers(in: scene.rootNode)
-
         // Log post-setup bounds so we know what we're framing.
         let (minB, maxB) = container.boundingBox
         Log.line("[Buddy3D]", String(format: "container bounds: min=(%.2f,%.2f,%.2f) max=(%.2f,%.2f,%.2f)",
@@ -355,25 +339,6 @@ struct PostureBuddy3DView: UIViewRepresentable {
         return nil
     }
 
-    /// Two-stage shader modifier:
-    ///   - .geometry: computes a 0..1 mask from the vertex's object-space height
-    ///     (Blender exports Z-up, so model-space `position.z` is vertical), with
-    ///     a smooth ramp picking up only the head sphere.
-    ///   - .surface: mixes the surface diffuse toward `u_headTint` by
-    ///     `u_tintAmount * mask`.
-    /// Coordinator sets both uniforms each frame from the current sceneTime.
-/// Recursively hide / show any node we added during bone-marker setup
-    /// (prefixes `_boneMarker_` and `_tipMarker_`).
-    private static func setBoneMarkersHidden(on node: SCNNode, hidden: Bool) {
-        if let name = node.name,
-           name.hasPrefix("_boneMarker_") || name.hasPrefix("_tipMarker_") {
-            node.isHidden = hidden
-        }
-        for c in node.childNodes {
-            setBoneMarkersHidden(on: c, hidden: hidden)
-        }
-    }
-
     private static func inventoryAnimations(on node: SCNNode, longest: inout TimeInterval, count: inout Int) {
         for key in node.animationKeys {
             if let player = node.animationPlayer(forKey: key) {
@@ -398,109 +363,7 @@ struct PostureBuddy3DView: UIViewRepresentable {
         }
     }
 
-    private static func firstSkinner(in root: SCNNode) -> SCNSkinner? {
-        if let s = root.skinner { return s }
-        for c in root.childNodes {
-            if let s = firstSkinner(in: c) { return s }
-        }
-        return nil
-    }
-
-    /// Attach a bright emissive sphere at every skeleton bone's origin so the
-    /// rig is visible through the mesh. Uses `SCNSkinner.bones` (30 bones
-    /// confirmed via startup log) as the authoritative list instead of walking
-    /// the hierarchy by name. Constant lighting model so markers pop even in
-    /// dim scenes. Color-coded by chain via a simple name-prefix check to make
-    /// screenshots easier to reason about:
-    ///   - Spine_* + Head → magenta  (the chain we rotate for forward-head)
-    ///   - Leg_*           → cyan    (hip + knee for sitting)
-    ///   - Arm_* / Elbow   → yellow
-    ///   - Hand / Foot     → green
-    ///   - everything else → white
-    private static func highlightBones(in root: SCNNode) {
-        guard let skinner = firstSkinner(in: root) else {
-            Log.line("[Buddy3D]", "WARN: no skinner found; skipping bone highlight")
-            return
-        }
-        let shown = skinner.bones.filter { shouldHighlight($0.name ?? "") }
-        Log.line("[Buddy3D]", "highlighting \(shown.count)/\(skinner.bones.count) bones")
-        for bone in shown {
-            let marker = SCNNode()
-            marker.name = "_boneMarker_\(bone.name ?? "?")"
-            marker.geometry = SCNSphere(radius: 0.05)
-            let mat = SCNMaterial()
-            mat.lightingModel = .constant
-            let color = boneMarkerColor(for: bone.name ?? "")
-            mat.diffuse.contents = color
-            mat.emission.contents = color
-            // Draw through the mesh: disable depth test + put markers after
-            // the skin in the render order so they always appear on top.
-            mat.readsFromDepthBuffer = false
-            mat.writesToDepthBuffer = false
-            marker.geometry?.firstMaterial = mat
-            marker.renderingOrder = 100
-            bone.addChildNode(marker)
-        }
-    }
-
-    /// Show primary joints only. Each limb is split into 5 bendy-bone
-    /// subdivisions (`_002…_005`); we show just `_002` (the limb root) so each
-    /// joint reads as one marker rather than a cluster of four. The spine
-    /// chain keeps all `Spine_B_*` segments so we can see the slouch arc.
-    private static func shouldHighlight(_ name: String) -> Bool {
-        if name.contains("_Bend") { return false }
-        let isLimbSegment = name.hasPrefix("UpperArm") || name.hasPrefix("LowerArm")
-                         || name.hasPrefix("UpperLeg") || name.hasPrefix("LowerLeg")
-        if isLimbSegment {
-            if name.hasSuffix("_003") || name.hasSuffix("_004") || name.hasSuffix("_005") {
-                return false
-            }
-        }
-        return true
-    }
-
-    /// Attach markers at the tip of each forearm and shin so we can eyeball
-    /// wrist / ankle positions. Blender bones have local +Y as the tail
-    /// direction, so an offset of `(0, boneLen, 0)` in the bone's frame lands
-    /// at the tip. Lengths are first-pass guesses for this model (~8.9 units
-    /// tall, Blender default proportions) — iterate if they land off-body.
-    private static func addLimbTipMarkers(in root: SCNNode) {
-        guard let skinner = firstSkinner(in: root) else { return }
-        // Bendy-bone subdivision: each limb is split into 5 segments, with
-        // `_005` being the tip-most one. Marker at a small +Y offset from the
-        // tip bone's origin lands near the wrist / ankle.
-        let tips: [(bone: String, length: Float)] = [
-            ("LowerArm_L_005", 0.15),
-            ("LowerArm_R_005", 0.15),
-            ("LowerLeg_L_005", 0.15),
-            ("LowerLeg_R_005", 0.15),
-        ]
-        for t in tips {
-            guard let bone = skinner.bones.first(where: { $0.name == t.bone }) else { continue }
-            let marker = SCNNode()
-            marker.name = "_tipMarker_\(t.bone)"
-            marker.simdPosition = SIMD3(0, t.length, 0)
-            marker.geometry = SCNSphere(radius: 0.05)
-            let mat = SCNMaterial()
-            mat.lightingModel = .constant
-            mat.diffuse.contents = UIColor.green
-            mat.emission.contents = UIColor.green
-            mat.readsFromDepthBuffer = false
-            mat.writesToDepthBuffer = false
-            marker.geometry?.firstMaterial = mat
-            marker.renderingOrder = 100
-            bone.addChildNode(marker)
-        }
-    }
-
-    private static func boneMarkerColor(for name: String) -> UIColor {
-        if name == "Head" || name.hasPrefix("Spine") { return .systemPink }
-        if name.contains("Leg") { return .cyan }
-        if name.contains("Arm") { return .yellow }
-        return .white
-    }
-
-/// One-time dump of the imported scene's node hierarchy — helpful for
+    /// One-time dump of the imported scene's node hierarchy — helpful for
     /// debugging bone-name mismatches on first bring-up. Disable once we trust
     /// the rig.
     private static var didDumpHierarchy = false

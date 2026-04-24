@@ -26,13 +26,14 @@ struct ContentView: View {
     @State private var trackingTimeoutTask: Task<Void, Never>?
     @State private var showTrackingFailedAlert = false
 
-    // Once calibration completes, fade the live preview to black over 1s and then
-    // drop the CameraPreviewView from the hierarchy so `AVCaptureVideoPreviewLayer`
-    // stops compositing frames — saves GPU power while the capture session keeps
-    // feeding PoseEstimator.
+    // Once calibration completes, shrink the camera surface to a bottom-right
+    // corner widget (with a camera icon) and drop the underlying preview layer
+    // so `AVCaptureVideoPreviewLayer` stops compositing frames — saves GPU power
+    // while the capture session keeps feeding PoseEstimator. Tap the widget to
+    // expand back to full-screen; tap the expanded preview to minimize again.
     @State private var videoHidden: Bool = false
-    @State private var videoFadeOpacity: Double = 0
-    @State private var videoFadeTask: Task<Void, Never>?
+    @State private var cameraMinimized: Bool = false
+    @State private var videoHideTask: Task<Void, Never>?
 
     /// Toggles the main on-screen visual between the friendly figure caricature
     /// (false, default) and the live skeleton overlay (true, debug).
@@ -42,11 +43,6 @@ struct ContentView: View {
     /// to inspect just the 3D rig. Bottom-left toggle; useful for camera /
     /// pose / bone diagnosis via finger-orbit on the SCNView.
     @State private var hideUI: Bool = false
-
-    /// Show the debug bone markers overlaid on the 3D mascot. Off by default
-    /// now that the rig is working — kept behind a toggle for future rig
-    /// debugging.
-    @State private var showBones: Bool = false
 
     // Debug transform state driven by AxisKnob + pan/pinch gestures when
     // `hideUI` is on. `PostureBuddy3DView` only applies these when
@@ -63,8 +59,8 @@ struct ContentView: View {
     @State private var modelOffsetAtStart: CGSize = .zero
 
     private let trackingTimeoutSeconds: Double = 45
-    private let videoFadeStartDelay: Duration = .seconds(3)
-    private let videoFadeDuration: Double = 1.0
+    private let minimizeStartDelay: Duration = .seconds(3)
+    private static let cameraAnimationDuration: Double = 0.6
 
     /// Dark slate backdrop shown behind the buddy once the camera preview
     /// fades out. Slightly warmer than pure black so the white mascot has a
@@ -77,9 +73,9 @@ struct ContentView: View {
             .animation(.easeInOut(duration: 0.2), value: calibration.countdown)
             .animation(.easeInOut(duration: 0.2), value: calibration.instruction)
             .animation(.easeInOut(duration: 0.2), value: showTrackingFailedAlert)
-            .animation(.easeInOut(duration: videoFadeDuration), value: videoFadeOpacity)
-            // Drives PostureBuddyView's head pivot. 0.4s feels natural for body
-            // motion (slower than the snappy 0.2s state changes).
+            .animation(.easeInOut(duration: Self.cameraAnimationDuration), value: cameraMinimized)
+            // Drives PostureBuddy3DView's slouch animation. 0.4s feels natural
+            // for body motion (slower than the snappy 0.2s state changes).
             .animation(.easeInOut(duration: 0.4), value: poseEstimator.currentPose?.score?.value)
             .animation(.easeInOut(duration: 0.2), value: showDebugOverlay)
             // Snap mirroring (don't animate the buddy "flipping" through its
@@ -99,11 +95,11 @@ struct ContentView: View {
             }
             .onChange(of: poseEstimator.isCalibrated) { _, calibrated in
                 if calibrated {
-                    hideVideo(afterDelay: videoFadeStartDelay)
+                    minimizeCamera(afterDelay: minimizeStartDelay)
                 } else {
                     // Recalibration or reset — bring the preview back for the
                     // upcoming calibration flow.
-                    showVideo()
+                    expandCamera()
                 }
             }
             .onChange(of: poseEstimator.currentPose?.score?.value) {
@@ -139,24 +135,9 @@ struct ContentView: View {
         ZStack {
             Self.backdropSlate.ignoresSafeArea()
 
-            if !videoHidden && !hideUI {
-                CameraPreviewView(session: cameraManager.session)
-                    .ignoresSafeArea()
-            }
-
-            // Slate dimmer between the camera preview and the skeleton.
-            // Animated via the body-level `.animation(value: videoFadeOpacity)`
-            // modifier, so we just set the target opacity from the fade Task.
-            // Suppressed in Hide-UI mode — the root slate already covers it.
-            if !hideUI {
-                Self.backdropSlate
-                    .opacity(videoFadeOpacity)
-                    .ignoresSafeArea()
-                    .allowsHitTesting(false)
-            }
-
-            // Default visual is the Posture Buddy mascot; Debug toggle (under
-            // CalibrateButton) swaps it for the raw skeleton overlay.
+            // Buddy (or skeleton overlay) sits beneath the camera surface.
+            // The camera covers it at full-screen and reveals it as the camera
+            // shrinks to the corner widget.
             if showDebugOverlay {
                 PostureOverlayView(detectedPose: poseEstimator.currentPose)
                     .ignoresSafeArea()
@@ -170,13 +151,16 @@ struct ContentView: View {
                     pitchDeg: modelPitch,
                     rollDeg: modelRoll,
                     scale: modelScale,
-                    translation: modelOffset,
-                    showBones: showBones
+                    translation: modelOffset
                 )
                 .ignoresSafeArea()
                 .rotatedIfUpsideDown(isUpsideDown)
                 .gesture(modelDragGesture, including: hideUI ? .gesture : .none)
                 .simultaneousGesture(modelPinchGesture, including: hideUI ? .gesture : .none)
+            }
+
+            if !hideUI {
+                cameraContainer
             }
 
             if !hideUI {
@@ -186,23 +170,6 @@ struct ContentView: View {
                                  isCalibrated: poseEstimator.isCalibrated)
                         .padding()
                     Spacer()
-                    // Toggle camera preview visibility. Drives the same fade state
-                    // the post-calibration auto-fade uses, so tapping here mid-fade
-                    // cancels the auto-fade task and reverses direction.
-                    Button {
-                        if isVideoHiddenOrHiding {
-                            showVideo()
-                        } else {
-                            hideVideo(afterDelay: .zero)
-                        }
-                    } label: {
-                        Image(systemName: isVideoHiddenOrHiding ? "video.slash.fill" : "video.fill")
-                            .font(.largeTitle)
-                            .foregroundStyle(.white)
-                            .padding(20)
-                            .background(Circle().fill(.black.opacity(0.4)))
-                    }
-                    .padding()
                 }
                 Spacer()
 
@@ -236,26 +203,16 @@ struct ContentView: View {
                 // (so the prop / bezel doesn't occlude either button).
                 .padding(.bottom, 12)
 
-                // Debug toggles — outside the `isTrackingReady` Group so
-                // they're always available (useful for previewing the figure
-                // before pose tracking has warmed up).
-                HStack(spacing: 10) {
-                    Button { showDebugOverlay.toggle() } label: {
-                        Text(showDebugOverlay ? "Hide Debug" : "Debug")
-                            .font(.footnote.weight(.medium))
-                            .foregroundStyle(.white.opacity(0.7))
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
-                            .background(Capsule().stroke(.white.opacity(0.4), lineWidth: 1))
-                    }
-                    Button { showBones.toggle() } label: {
-                        Text(showBones ? "Hide Bones" : "Bones")
-                            .font(.footnote.weight(.medium))
-                            .foregroundStyle(.white.opacity(0.7))
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
-                            .background(Capsule().stroke(.white.opacity(0.4), lineWidth: 1))
-                    }
+                // Debug toggle — outside the `isTrackingReady` Group so it's
+                // always available (useful for previewing the figure before
+                // pose tracking has warmed up).
+                Button { showDebugOverlay.toggle() } label: {
+                    Text(showDebugOverlay ? "Hide Debug" : "Debug")
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(Capsule().stroke(.white.opacity(0.4), lineWidth: 1))
                 }
                 .padding(.bottom, 100)
             }
@@ -361,35 +318,123 @@ struct ContentView: View {
             .onEnded   { _ in modelScaleAtStart = modelScale }
     }
 
-    /// `true` once the fade-to-black has passed its midpoint or the preview has
-    /// been fully removed. Drives the camera-toggle button's icon and direction
-    /// (tap while "hiding-or-hidden" reverses to show).
-    private var isVideoHiddenOrHiding: Bool {
-        videoHidden || videoFadeOpacity > 0.5
+    /// Camera surface: full-screen preview at `cameraMinimized == false`,
+    /// literally scaled down to a bottom-right corner widget when minimized.
+    /// Uses `.scaleEffect` + `.offset` (not `.frame` + `.position`) so the
+    /// scale transform goes directly onto the view's backing layer — which
+    /// IS the `AVCaptureVideoPreviewLayer` — and CoreAnimation interpolates
+    /// it smoothly. `.frame` animation on a `UIViewRepresentable` only
+    /// translates / masks the preview during the transition; the video
+    /// content itself doesn't resize until the animation completes. Uniform
+    /// scaling also keeps the corner widget at the screen's aspect ratio
+    /// automatically (no separate height math).
+    @ViewBuilder
+    private var cameraContainer: some View {
+        GeometryReader { geo in
+            let fullW = geo.size.width
+            let fullH = geo.size.height
+            let minWidth: CGFloat = 80
+            let scale: CGFloat = cameraMinimized ? minWidth / fullW : 1.0
+            let safeScale = max(scale, 0.001)   // counter-scale divisor
+
+            let cornerInsetX: CGFloat = 20
+            let cornerInsetY: CGFloat = 100    // matches Hide UI / Debug button stack height
+
+            // `scaleEffect`'s `anchor` is the point on the view that stays
+            // fixed during scaling. Bottom-right anchor shrinks toward the
+            // bottom-right of the full-screen frame; we then offset inward by
+            // the inset to leave a margin. Upside-down: anchor the opposite
+            // corner so the widget ends up at the user's visual bottom-right
+            // either way (the camera-icon overlay is also counter-rotated).
+            let anchor: UnitPoint = isUpsideDown ? .topLeading : .bottomTrailing
+            let offsetX: CGFloat = !cameraMinimized ? 0
+                : (isUpsideDown ? cornerInsetX : -cornerInsetX)
+            let offsetY: CGFloat = !cameraMinimized ? 0
+                : (isUpsideDown ? cornerInsetY : -cornerInsetY)
+
+            // Corner radius + stroke live in the PRE-scale coordinate space,
+            // so they get scaled along with the preview content. Pre-scale
+            // radius 70 lands at ~14pt visible when minimized; pre-scale
+            // stroke 5 lands at ~1pt visible. Both are 0 / invisible at full-
+            // screen so the preview fills edge-to-edge.
+            let preRadius: CGFloat = cameraMinimized ? 70 : 0
+            let preStrokeWidth: CGFloat = 5
+
+            ZStack {
+                if !videoHidden {
+                    CameraPreviewView(session: cameraManager.session)
+                } else {
+                    Self.backdropSlate
+                }
+
+                // Icon overlay. Counter-scaled by 1/scale so the icon reads at
+                // a constant ~28pt visually regardless of the outer scale. The
+                // slate mat makes the icon readable even during the single
+                // frame where preview + slate are both rendered (before
+                // `videoHidden = true` fires post-animation).
+                ZStack {
+                    Self.backdropSlate
+                    Image(systemName: "video.fill")
+                        .font(.system(size: 28, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .scaleEffect(1 / safeScale)
+                        .rotationEffect(isUpsideDown ? .degrees(180) : .zero)
+                }
+                .opacity(cameraMinimized ? 1 : 0)
+            }
+            .frame(width: fullW, height: fullH)
+            .clipShape(RoundedRectangle(cornerRadius: preRadius))
+            .overlay(
+                RoundedRectangle(cornerRadius: preRadius)
+                    .stroke(.white.opacity(cameraMinimized ? 0.35 : 0),
+                            lineWidth: preStrokeWidth)
+            )
+            .scaleEffect(scale, anchor: anchor)
+            .offset(x: offsetX, y: offsetY)
+            .contentShape(Rectangle())
+            .onTapGesture { toggleCameraIfAllowed() }
+        }
+        .ignoresSafeArea()
     }
 
-    /// Fades the dimmer over the preview and, once fully opaque, removes the
-    /// `CameraPreviewView` from the hierarchy (saves GPU). `afterDelay` = 0 for
-    /// manual toggle; the post-calibration auto-fade uses `videoFadeStartDelay`.
-    private func hideVideo(afterDelay: Duration) {
-        videoFadeTask?.cancel()
-        videoFadeTask = Task { @MainActor in
+    /// Toggle the camera surface state. Only meaningful once we have baselines
+    /// to show something underneath, and never mid-calibration where the
+    /// GuidedCalibrationOverlay is the subject of the screen.
+    private func toggleCameraIfAllowed() {
+        guard poseEstimator.isCalibrated, !calibration.isActive else { return }
+        if cameraMinimized {
+            expandCamera()
+        } else {
+            minimizeCamera(afterDelay: .zero)
+        }
+    }
+
+    /// Animates the camera surface from full-screen down to the corner widget,
+    /// then tears down the `CameraPreviewView` to save GPU. `afterDelay` is 0
+    /// for manual tap; the post-calibration auto-flow uses `minimizeStartDelay`.
+    private func minimizeCamera(afterDelay: Duration) {
+        videoHideTask?.cancel()
+        videoHideTask = Task { @MainActor in
             if afterDelay > .zero {
                 try? await Task.sleep(for: afterDelay)
                 if Task.isCancelled { return }
             }
-            videoFadeOpacity = 1.0
-            try? await Task.sleep(for: .seconds(videoFadeDuration))
+            cameraMinimized = true
+            // Wait out the shrink animation before dropping the preview layer
+            // so the user sees it smoothly shrink (no pop-to-icon mid-way).
+            try? await Task.sleep(for: .seconds(Self.cameraAnimationDuration + 0.15))
             if Task.isCancelled { return }
             videoHidden = true
         }
     }
 
-    /// Re-adds the preview (if removed) and animates the dimmer back to transparent.
-    private func showVideo() {
-        videoFadeTask?.cancel()
+    /// Re-adds the preview layer and animates the widget back to full-screen.
+    /// Setting `videoHidden = false` first ensures the user sees live frames
+    /// during the grow animation, not slate.
+    private func expandCamera() {
+        videoHideTask?.cancel()
         videoHidden = false
-        videoFadeOpacity = 0
+        cameraMinimized = false
     }
 
     /// Resumes or starts camera capture: keeps the screen awake, starts the capture

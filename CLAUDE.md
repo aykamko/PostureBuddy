@@ -102,11 +102,13 @@ Workflow:
 3. Otherwise convert each mp3 to aiff: `ffmpeg -i in.mp3 -c:a pcm_s16be out.aiff`.
 4. Replace files in `Posture Buddy/VoicePrompts/`. Filenames must match `VoicePrompt.rawValue` exactly.
 
-### Battery: drop the video preview post-calibration
-- Once `poseEstimator.isCalibrated` becomes true, `ContentView` waits 3 s, fades a dark slate overlay (RGB 36/37/43, see `ContentView.backdropSlate`) over the preview in ~1 s, then *removes* the `CameraPreviewView` from the view hierarchy. That deallocates the `AVCaptureVideoPreviewLayer`, which is the main GPU consumer — the capture session and `PoseEstimator` keep running unchanged, so pose detection and scoring are unaffected. By default the **Posture Buddy** mascot (`PostureBuddy3DView`, a SceneKit 3D scene) renders above the dimmer; the on-screen *Debug* toggle below CalibrateButton swaps it for `PostureOverlayView` (skeleton + face landmarks). The *Bones* toggle next to Debug overlays per-joint markers on the 3D rig for diagnosis (off by default). Either way the upper-layer visual stays visible after the camera fade.
+### Battery: minimize the camera to a corner widget post-calibration
+- Once `poseEstimator.isCalibrated` becomes true, `ContentView` waits 3 s (`minimizeStartDelay`), then animates the camera surface from full-screen down to a bottom-right corner widget (~80×110 pt, 14 pt radius) over ~0.6 s (`ContentView.cameraAnimationDuration`). As the widget settles, a camera-icon overlay cross-fades in and the underlying `CameraPreviewView` is dropped from the hierarchy. That deallocates the `AVCaptureVideoPreviewLayer`, which is the main GPU consumer — the capture session and `PoseEstimator` keep running unchanged, so pose detection and scoring are unaffected. Tapping the corner widget expands the preview back to full-screen + re-adds the preview layer; tapping the expanded preview minimizes it again. Both directions are gated on `poseEstimator.isCalibrated && !calibration.isActive`.
+- The **Posture Buddy** mascot (`PostureBuddy3DView`, a SceneKit 3D scene) renders *behind* the camera surface — hidden while the preview covers the screen, revealed directly on the slate backdrop (RGB 36/37/43, see `ContentView.backdropSlate`) as the camera widget shrinks. The on-screen *Debug* toggle below CalibrateButton swaps the mascot for `PostureOverlayView` (skeleton + face landmarks) in the same layer slot.
+- There is no separate top-right camera-toggle button — the corner widget itself is the only affordance for manual show/hide. Pre-calibration the widget is full-screen and taps are a no-op (nothing to reveal underneath).
 
 ### Posture Buddy mascot (3D SceneKit)
-The app's primary user-facing visual. Lives at `Views/PostureBuddy3DView.swift` — a `UIViewRepresentable` wrapping an `SCNView`. There's also a legacy 2D SwiftUI version at `Views/PostureBuddyView.swift`; it isn't referenced from ContentView and can be retired when convenient.
+The app's primary user-facing visual. Lives at `Views/PostureBuddy3DView.swift` — a `UIViewRepresentable` wrapping an `SCNView`.
 
 #### Asset pipeline
 - Source `.blend`s live in `assets/` at the repo root: `posture_buddy_v3_baked.blend` (rigged + animated stickman, 0 = upright, 50 = fully slouched) and `chairoff.blend` (static swivel chair mesh).
@@ -202,7 +204,6 @@ Posture Buddy/                          (iOS target)
 │   ├── ScoreHUDView.swift              108pt circle, color-coded score
 │   ├── CalibrateButton.swift           Capsule button, flips to red "Cancel" while calibrating
 │   ├── PostureBuddy3DView.swift        3D SceneKit mascot — loads stickman.usdz, scrubs the baked slouch animation by score, tints HeadMesh white→yellow→red; default after-calibration visual
-│   ├── PostureBuddyView.swift          Legacy 2D SwiftUI mascot (no longer wired up; keep until retired)
 │   ├── AxisKnob.swift                  Press-and-drag vertical slider used by Hide-UI for yaw/pitch/roll knobs
 │   ├── TrackingLoadingView.swift       Spinner + message while pose model is loading
 │   ├── AlertOverlay.swift              Custom modal (native .alert doesn't respect manual rotation)
@@ -248,8 +249,8 @@ PoseEstimator.captureOutput (nonisolated, 10 FPS throttled)
     │  exponential smoothing on score (0.8*prev + 0.2*new)
     ▼  Task { @MainActor } publishes DetectedPose (keypoints w/ isStale + faceLandmarks + score)
 ContentView
-    ├── CameraPreviewView        (bottom layer, not rotated; faded out + removed 3 s after calibration; backdrop fades to the slate RGB 36/37/43)
-    ├── PostureBuddy3DView | PostureOverlayView    (Debug toggle — default is the 3D mascot; sceneTime scrubs a baked slouch animation by score, HeadMesh diffuse tints white→yellow→red; debug shows skeleton + face landmarks. Bones toggle overlays per-joint markers on the 3D rig.)
+    ├── PostureBuddy3DView | PostureOverlayView    (Debug toggle — default is the 3D mascot; sceneTime scrubs a baked slouch animation by score, HeadMesh diffuse tints white→yellow→red; buddy sits behind the camera surface and is revealed as the camera minimizes)
+    ├── cameraContainer          (full-screen preview → bottom-right corner widget with camera icon, auto-minimized 3 s after calibration commits; tap to toggle; preview layer dropped once minimized)
     ├── ScoreHUDView             (108pt circle, color-coded score)
     ├── CalibrateButton / Debug toggle / TrackingLoadingView / GuidedCalibrationOverlay / AlertOverlay
     └── onChange(score) → NotificationManager.update + PostureSoundCoach.update (skips nil scores)
@@ -288,3 +289,4 @@ ContentView
 - **Ear-confidence ratio is mostly dead as a frontality signal.** The body-pose model typically only detects one ear when the phone is propped at the user's side (all three calibration positions are still substantially in profile), so `min/max` of the two ear confidences is ~0 across all positions. Kept in `YawTelemetry` for diagnostics, but `FrontalityFeature` doesn't include it.
 - **`VNFaceObservation.boundingBox` aspect ratio is fixed** (observed ≈1.78 W/H in portrait, identical across all head positions). Vision sizes the bbox consistently regardless of how frontal the face is. Not a usable frontality proxy — don't try.
 - **Face landmarks are in bounding-box-local coords**, not image-normalized. `VNFaceLandmarkRegion2D.normalizedPoints` ranges 0-1 within the face rect — you have to transform by `bbox.origin + p * bbox.size` to get image-space coordinates that match what the body pose model returns. For a yaw signal that's bbox-invariant, you can use normalized points directly without converting.
+- **Camera preview rotation rule still holds in the minimize refactor.** The corner widget's *position* flips to the opposite screen corner under `isUpsideDown` (top-left in screen coords = bottom-right visually when the phone is flipped) and the camera-icon overlay is rotated 180°, but the `CameraPreviewView` itself stays unrotated inside the widget — SwiftUI rotation on top of `AVCaptureVideoPreviewLayer`'s internal orientation handling would double up and flip the user upside-down in the preview.
