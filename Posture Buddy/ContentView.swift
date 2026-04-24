@@ -52,9 +52,11 @@ struct ContentView: View {
     // `hideUI` is on. `PostureBuddy3DView` only applies these when
     // `debugEnabled` is true, so toggling `hideUI` off snaps the model back
     // to its normal position without losing the values.
-    @State private var modelYaw: Double = 0
-    @State private var modelPitch: Double = 0
-    @State private var modelRoll: Double = 0
+    // Seeded with the same isometric default the non-debug path uses so
+    // entering Hide-UI doesn't change the view — knobs just start there.
+    @State private var modelYaw: Double = PostureBuddy3DView.defaultYawDeg
+    @State private var modelPitch: Double = PostureBuddy3DView.defaultPitchDeg
+    @State private var modelRoll: Double = PostureBuddy3DView.defaultRollDeg
     @State private var modelScale: Double = 1.0
     @State private var modelScaleAtStart: Double = 1.0
     @State private var modelOffset: CGSize = .zero
@@ -63,6 +65,11 @@ struct ContentView: View {
     private let trackingTimeoutSeconds: Double = 45
     private let videoFadeStartDelay: Duration = .seconds(3)
     private let videoFadeDuration: Double = 1.0
+
+    /// Dark slate backdrop shown behind the buddy once the camera preview
+    /// fades out. Slightly warmer than pure black so the white mascot has a
+    /// little tonal separation from the backdrop.
+    private static let backdropSlate = Color(red: 36/255, green: 37/255, blue: 43/255)
 
     var body: some View {
         mainContent
@@ -130,19 +137,19 @@ struct ContentView: View {
     @ViewBuilder
     private var mainContent: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            Self.backdropSlate.ignoresSafeArea()
 
             if !videoHidden && !hideUI {
                 CameraPreviewView(session: cameraManager.session)
                     .ignoresSafeArea()
             }
 
-            // Black dimmer between the camera preview and the skeleton. Animated via
-            // the body-level `.animation(value: videoFadeOpacity)` modifier, so we
-            // just set the target opacity from the fade Task. Suppressed in Hide-UI
-            // mode — the root Color.black already gives us a plain backdrop.
+            // Slate dimmer between the camera preview and the skeleton.
+            // Animated via the body-level `.animation(value: videoFadeOpacity)`
+            // modifier, so we just set the target opacity from the fade Task.
+            // Suppressed in Hide-UI mode — the root slate already covers it.
             if !hideUI {
-                Color.black
+                Self.backdropSlate
                     .opacity(videoFadeOpacity)
                     .ignoresSafeArea()
                     .allowsHitTesting(false)
@@ -309,7 +316,9 @@ struct ContentView: View {
                         AxisKnob(label: "P", value: $modelPitch, accent: .yellow)
                         AxisKnob(label: "R", value: $modelRoll,  accent: .pink)
                         Button {
-                            modelYaw = 0; modelPitch = 0; modelRoll = 0
+                            modelYaw = PostureBuddy3DView.defaultYawDeg
+                            modelPitch = PostureBuddy3DView.defaultPitchDeg
+                            modelRoll = PostureBuddy3DView.defaultRollDeg
                             modelScale = 1.0; modelScaleAtStart = 1.0
                             modelOffset = .zero; modelOffsetAtStart = .zero
                         } label: {

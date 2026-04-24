@@ -40,6 +40,25 @@ struct PostureBuddy3DView: UIViewRepresentable {
     /// the finger at roughly 1:1 on-screen when the figure is centered.
     private static let translationScale: Float = 0.004
 
+    /// Default viewing orientation for the buddy + chair — a 3/4 isometric-ish
+    /// angle chosen in Hide-UI debug mode and baked in here. Applied on top of
+    /// the ear-based mirror rotation so left/right mirroring still works.
+    /// `internal` (not private) so ContentView can seed the Hide-UI knobs to
+    /// these same values — Hide-UI then starts at the same view, not at zero.
+    static let defaultYawDeg: Double = -136
+    static let defaultPitchDeg: Double = -18
+    static let defaultRollDeg: Double = 11
+
+    /// The world point the camera looks at. Used both to set up the camera in
+    /// `makeScene` and as the auto-center target for the buddyContainer (so
+    /// the rotated bounding-box midpoint lands here every frame).
+    private static let cameraLookAt = SIMD3<Float>(0, 0.3, 0.1)
+
+    /// Extra fixed offset applied to the auto-centered buddy position, in
+    /// world units. -Z is screen-right with the current camera. Use a small
+    /// negative value to nudge the figure off-center toward the right edge.
+    private static let viewOffset = SIMD3<Float>(0, 0, -0.09)
+
     func makeUIView(context: Context) -> SCNView {
         let view = SCNView()
         view.backgroundColor = .clear
@@ -61,11 +80,17 @@ struct PostureBuddy3DView: UIViewRepresentable {
     }
 
     func updateUIView(_ view: SCNView, context: Context) {
-        // Diagnostic phase: let the imported animation loop naturally (set in
-        // cacheDriveNodes). If the buddy slouches/unslouches on a cycle we
-        // know the export/import path is good and can switch back to
-        // score-driven sceneTime scrubbing.
-        view.rendersContinuously = true
+        // Posture score → animation scrub. The Blender clip runs from
+        // "upright sit" at frame 0 to "fully slouched" at frame 50; we map
+        // current posture to a point along that timeline. All animations were
+        // flipped to `usesSceneTimeBase = true` at load, so setting
+        // `view.sceneTime` is what advances the skin deformation.
+        let ratio = Self.slouchRatio(for: score)
+        let target = ratio * context.coordinator.animationDuration
+        Log.line("[Buddy3D]", String(format: "score=%@ ratio=%.2f sceneTime=%.2f/%.2f",
+            score?.value.description ?? "nil", ratio, target, context.coordinator.animationDuration))
+        view.sceneTime = target
+        view.rendersContinuously = false
 
         // Toggle debug bone markers. The helper walks the tree once per
         // update; cheap enough at 30 or so markers and avoids caching state
@@ -83,27 +108,55 @@ struct PostureBuddy3DView: UIViewRepresentable {
             let mirrorAngle: Float = dominantEar == .left ? .pi : 0
             let mirrorRot = simd_quatf(angle: mirrorAngle, axis: [0, 1, 0])
 
+            // Build the user-facing rotation. Debug mode uses the live knobs;
+            // otherwise we use the baked default 3/4 isometric.
+            let userRot: simd_quatf
             if debugEnabled {
                 let yaw = Float(yawDeg) * .pi / 180
                 let pitch = Float(pitchDeg) * .pi / 180
                 let roll = Float(rollDeg) * .pi / 180
-                // Yaw × pitch × roll in YXZ order, applied outside mirror so
-                // dragging "yaw right" reads as right-handed for both
-                // non-mirrored and mirrored (ear-flipped) figures.
-                let debugRot = simd_quatf(angle: yaw,   axis: [0, 1, 0])
-                             * simd_quatf(angle: pitch, axis: [1, 0, 0])
-                             * simd_quatf(angle: roll,  axis: [0, 0, 1])
-                flipNode.simdOrientation = context.coordinator.flipRest * debugRot * mirrorRot
-                flipNode.simdPosition = SIMD3(
+                userRot = simd_quatf(angle: yaw,   axis: [0, 1, 0])
+                        * simd_quatf(angle: pitch, axis: [1, 0, 0])
+                        * simd_quatf(angle: roll,  axis: [0, 0, 1])
+            } else {
+                let yaw   = Float(Self.defaultYawDeg)   * .pi / 180
+                let pitch = Float(Self.defaultPitchDeg) * .pi / 180
+                let roll  = Float(Self.defaultRollDeg)  * .pi / 180
+                userRot = simd_quatf(angle: yaw,   axis: [0, 1, 0])
+                        * simd_quatf(angle: pitch, axis: [1, 0, 0])
+                        * simd_quatf(angle: roll,  axis: [0, 0, 1])
+            }
+
+            let totalRot = context.coordinator.flipRest * userRot * mirrorRot
+            let scaleVal = Self.baseScale * (debugEnabled ? Float(scale) : 1.0)
+
+            flipNode.simdOrientation = totalRot
+            flipNode.simdScale = SIMD3(repeating: scaleVal)
+
+            // Auto-center the figure on the camera's look-at by computing the
+            // rotated bounding-box center and offsetting position to land it
+            // there. The local boundingBox doesn't change as the rig animates
+            // significantly, but we recompute every update so slouch + chair
+            // stay properly framed.
+            let (lmin, lmax) = flipNode.boundingBox
+            let localCenter = SIMD3<Float>(
+                Float(lmin.x + lmax.x) * 0.5,
+                Float(lmin.y + lmax.y) * 0.5,
+                Float(lmin.z + lmax.z) * 0.5
+            )
+            let scaledCenter = SIMD3<Float>(repeating: scaleVal) * localCenter
+            let rotatedCenter = totalRot.act(scaledCenter)
+            let autoCenter = Self.cameraLookAt + Self.viewOffset - rotatedCenter
+
+            if debugEnabled {
+                let dragOffset = SIMD3<Float>(
                     Float(translation.width)  *  Self.translationScale,
                     Float(translation.height) * -Self.translationScale,
                     0
                 )
-                flipNode.simdScale = SIMD3(repeating: Self.baseScale * Float(scale))
+                flipNode.simdPosition = autoCenter + dragOffset
             } else {
-                flipNode.simdOrientation = context.coordinator.flipRest * mirrorRot
-                flipNode.simdPosition = SIMD3<Float>(0, 0, 0)
-                flipNode.simdScale = SIMD3(repeating: Self.baseScale)
+                flipNode.simdPosition = autoCenter
             }
         }
         SCNTransaction.commit()
@@ -177,8 +230,8 @@ struct PostureBuddy3DView: UIViewRepresentable {
         cam.camera?.fieldOfView = 45
         cam.camera?.zNear = 0.1
         cam.camera?.zFar = 50
-        cam.simdPosition = SIMD3(2.5, 0.3, 0)
-        cam.simdLook(at: SIMD3(0, 0.3, 0.1), up: SIMD3(0, 1, 0), localFront: SIMD3(0, 0, -1))
+        cam.simdPosition = SIMD3(3.75, Self.cameraLookAt.y, 0)
+        cam.simdLook(at: Self.cameraLookAt, up: SIMD3(0, 1, 0), localFront: SIMD3(0, 0, -1))
         scene.rootNode.addChildNode(cam)
 
         // Lighting: soft ambient + one directional for mild shading.
@@ -233,10 +286,18 @@ struct PostureBuddy3DView: UIViewRepresentable {
             if let player = node.animationPlayer(forKey: key) {
                 count += 1
                 longest = max(longest, player.animation.duration)
-                // Loop so the diagnostic playback keeps cycling.
-                player.animation.repeatCount = .greatestFiniteMagnitude
-                player.animation.autoreverses = true
-                player.play()
+                // Drive the clip with scene time so we can scrub it directly
+                // by score in updateUIView. Re-attach so the new time-base
+                // setting actually takes effect (changing the property on a
+                // running animation is silently ignored on some iOS versions).
+                player.animation.usesSceneTimeBase = true
+                player.animation.repeatCount = 1
+                player.animation.autoreverses = false
+                player.animation.timeOffset = 0
+                let anim = player.animation
+                node.removeAnimation(forKey: key)
+                node.addAnimation(anim, forKey: key)
+                node.animationPlayer(forKey: key)?.play()
             }
         }
         for c in node.childNodes {
