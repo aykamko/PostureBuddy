@@ -17,10 +17,28 @@ if [[ ! -x "$BLENDER" ]]; then
     echo "ERROR: Blender not found at $BLENDER" >&2
     exit 1
 fi
-if [[ ! -f "$BLEND" ]]; then
-    echo "ERROR: .blend not found at $BLEND" >&2
-    exit 1
-fi
+
+# .blend files are tracked via Git LFS. On a fresh clone they start life as
+# tiny pointer files (~133 bytes) until `git lfs pull` downloads the real
+# thing. Blender happily opens those and silently gives us a T-pose. Fail
+# early with a clear message instead.
+is_lfs_pointer() {
+    [[ -f "$1" ]] || return 1
+    head -c 64 "$1" 2>/dev/null | grep -q '^version https://git-lfs\.github\.com/spec/'
+}
+
+for path in "$BLEND" "$REPO_ROOT/assets/chairoff.blend"; do
+    if [[ ! -f "$path" ]]; then
+        echo "ERROR: .blend not found at $path" >&2
+        exit 1
+    fi
+    if is_lfs_pointer "$path"; then
+        echo "ERROR: $path is a Git LFS pointer (not the real file)." >&2
+        echo "       Run \`git lfs pull\` in the repo root to fetch the actual" >&2
+        echo "       .blend assets, then rerun this script." >&2
+        exit 1
+    fi
+done
 
 echo "→ Blender: $BLENDER"
 echo "→ Source : $BLEND"

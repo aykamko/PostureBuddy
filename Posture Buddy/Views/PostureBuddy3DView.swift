@@ -201,14 +201,25 @@ struct PostureBuddy3DView: UIViewRepresentable {
             }
         }
 
-        /// White → yellow at mid-slouch → red at full slouch.
+        /// Ramp tied to `PostureScore.Grade` thresholds (see CLAUDE.md — good
+        /// ≥ 75, fair 60-75, poor < 60). `slouchRatio` maps score=90→0,
+        /// score=30→1, so 75→0.25, 60→0.5.
+        ///
+        ///   - ratio ≤ 0.25 (good)       → pure white, no tint
+        ///   - 0.25 < ratio ≤ 0.5 (fair) → white blends toward yellow
+        ///   - ratio > 0.5 (poor)        → yellow blends toward a softened red
+        ///                                  (20% diluted with white so it's
+        ///                                  less harsh at full slouch)
         private func headTintUIColor(ratio: Double) -> UIColor {
             let white  = SIMD3<Double>(1.0, 1.0, 1.0)
             let yellow = SIMD3<Double>(1.0, 0.85, 0.0)
-            let red    = SIMD3<Double>(1.0, 0.20, 0.20)
+            let redRaw = SIMD3<Double>(1.0, 0.20, 0.20)
+            let red    = redRaw * 0.8 + white * 0.2  // 20% less strong
             let c: SIMD3<Double>
-            if ratio < 0.5 {
-                let t = ratio / 0.5
+            if ratio <= 0.25 {
+                c = white
+            } else if ratio <= 0.5 {
+                let t = (ratio - 0.25) / 0.25
                 c = white * (1 - t) + yellow * t
             } else {
                 let t = (ratio - 0.5) / 0.5
