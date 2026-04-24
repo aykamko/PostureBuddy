@@ -170,51 +170,62 @@ struct ContentView: View {
                                  isCalibrated: poseEstimator.isCalibrated)
                         .padding()
                     Spacer()
+                    // Top-right: small circular refresh button to start a
+                    // recalibration. Only shown once tracking is live so it
+                    // doesn't compete with the big initial-setup CTA below.
+                    if poseEstimator.isCalibrated {
+                        Button {
+                            calibration.start(
+                                poseEstimator: poseEstimator,
+                                soundCoach: soundCoach,
+                                notificationManager: notificationManager
+                            )
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.title3.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 44, height: 44)
+                                .background(Circle().fill(.white.opacity(0.16)))
+                                .overlay(Circle().stroke(.white.opacity(0.3), lineWidth: 1))
+                        }
+                        .padding(.trailing, 16)
+                        .padding(.top, 8)
+                    }
                 }
                 Spacer()
 
-                Group {
-                    if poseEstimator.isTrackingReady {
-                        CalibrateButton(
-                            isCalibrated: poseEstimator.isCalibrated,
-                            hasSavedBaselines: poseEstimator.hasSavedBaselines,
-                            isActive: calibration.isActive
-                        ) {
-                            if calibration.isActive {
-                                calibration.cancel()
-                            } else if poseEstimator.hasSavedBaselines && !poseEstimator.isCalibrated {
-                                // "Start Tracking" — restored baselines from disk; flip
-                                // tracking on without re-running calibration.
-                                poseEstimator.startTracking()
-                            } else {
-                                calibration.start(
-                                    poseEstimator: poseEstimator,
-                                    soundCoach: soundCoach,
-                                    notificationManager: notificationManager
-                                )
+                // Big primary action: only when the user actually needs to do
+                // something (initial setup, "Start Tracking", or active
+                // calibration with a Cancel option). Once `isCalibrated`
+                // flips true the small top-right refresh button takes over.
+                if !poseEstimator.isCalibrated {
+                    Group {
+                        if poseEstimator.isTrackingReady {
+                            CalibrateButton(
+                                isCalibrated: poseEstimator.isCalibrated,
+                                hasSavedBaselines: poseEstimator.hasSavedBaselines,
+                                isActive: calibration.isActive
+                            ) {
+                                if calibration.isActive {
+                                    calibration.cancel()
+                                } else if poseEstimator.hasSavedBaselines && !poseEstimator.isCalibrated {
+                                    // "Start Tracking" — restored baselines from disk; flip
+                                    // tracking on without re-running calibration.
+                                    poseEstimator.startTracking()
+                                } else {
+                                    calibration.start(
+                                        poseEstimator: poseEstimator,
+                                        soundCoach: soundCoach,
+                                        notificationManager: notificationManager
+                                    )
+                                }
                             }
+                        } else {
+                            TrackingLoadingView(message: "Initializing pose tracking…")
                         }
-                    } else {
-                        TrackingLoadingView(message: "Initializing pose tracking…")
                     }
+                    .padding(.bottom, 100)
                 }
-                // Small gap below the calibrate button before the Debug toggle.
-                // The Debug button itself carries the rest of the bottom-clearance
-                // (so the prop / bezel doesn't occlude either button).
-                .padding(.bottom, 12)
-
-                // Debug toggle — outside the `isTrackingReady` Group so it's
-                // always available (useful for previewing the figure before
-                // pose tracking has warmed up).
-                Button { showDebugOverlay.toggle() } label: {
-                    Text(showDebugOverlay ? "Hide Debug" : "Debug")
-                        .font(.footnote.weight(.medium))
-                        .foregroundStyle(.white.opacity(0.7))
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 8)
-                        .background(Capsule().stroke(.white.opacity(0.4), lineWidth: 1))
-                }
-                .padding(.bottom, 100)
             }
             .rotatedIfUpsideDown(isUpsideDown)
             }
@@ -241,29 +252,36 @@ struct ContentView: View {
                 .transition(.opacity)
             }
 
-            // Always-visible Hide/Show UI toggle. Stays on top so we can get
-            // the chrome back when we're done inspecting the rig.
+            #if DEBUG
+            // Debug menu (gear icon, bottom-left) bundles Hide UI + the
+            // skeleton-overlay toggle. Wrapped in `#if DEBUG` so the menu and
+            // its state changes are stripped from Release builds entirely;
+            // the underlying state vars remain (defaulted false) so the
+            // existing conditionals downstream just take their non-debug
+            // path.
             VStack {
                 Spacer()
                 HStack {
-                    Button { hideUI.toggle() } label: {
-                        Text(hideUI ? "Show UI" : "Hide UI")
-                            .font(.footnote.weight(.medium))
-                            .foregroundStyle(.white.opacity(0.7))
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
-                            .background(Capsule().fill(.black.opacity(0.4)))
-                            .overlay(Capsule().stroke(.white.opacity(0.4), lineWidth: 1))
+                    Menu {
+                        Toggle("Hide UI", isOn: $hideUI)
+                        Toggle("Skeleton overlay", isOn: $showDebugOverlay)
+                    } label: {
+                        Image(systemName: "gearshape.fill")
+                            .font(.title3)
+                            .foregroundStyle(.white.opacity(0.85))
+                            .frame(width: 40, height: 40)
+                            .background(Circle().fill(.black.opacity(0.45)))
+                            .overlay(Circle().stroke(.white.opacity(0.35), lineWidth: 1))
                     }
-                    .padding(.leading, 20)
-                    .padding(.bottom, 100)
+                    .padding(.leading, 16)
+                    .padding(.bottom, 16)
                     Spacer()
                 }
             }
             .rotatedIfUpsideDown(isUpsideDown)
 
-            // Debug axis knobs shown in Hide-UI mode. Press-and-drag each knob
-            // vertically to spin that axis; Reset zeroes all five transforms.
+            // Axis knobs shown in Hide-UI mode for tweaking the 3D view.
+            // Same #if DEBUG fence — release builds never enter Hide UI mode.
             if hideUI {
                 VStack {
                     Spacer()
@@ -293,6 +311,7 @@ struct ContentView: View {
                 }
                 .rotatedIfUpsideDown(isUpsideDown)
             }
+            #endif
         }
     }
 
@@ -337,15 +356,25 @@ struct ContentView: View {
             let scale: CGFloat = cameraMinimized ? minWidth / fullW : 1.0
             let safeScale = max(scale, 0.001)   // counter-scale divisor
 
-            let cornerInsetX: CGFloat = 20
-            let cornerInsetY: CGFloat = 100    // matches Hide UI / Debug button stack height
+            // Pin the minimized widget snug against the safe-area corner with
+            // a small visual margin. `geo.safeAreaInsets` is non-zero here
+            // even though the GeometryReader is inside `.ignoresSafeArea()` —
+            // the proxy reports the *actual* insets so children can still
+            // respect them when desired.
+            let edgeMargin: CGFloat = 12
+            let safeBottom = geo.safeAreaInsets.bottom
+            let safeTop = geo.safeAreaInsets.top
+            let safeLeading = geo.safeAreaInsets.leading
+            let safeTrailing = geo.safeAreaInsets.trailing
+            let cornerInsetX: CGFloat = (isUpsideDown ? safeLeading : safeTrailing) + edgeMargin
+            let cornerInsetY: CGFloat = (isUpsideDown ? safeTop : safeBottom) + edgeMargin
 
             // `scaleEffect`'s `anchor` is the point on the view that stays
             // fixed during scaling. Bottom-right anchor shrinks toward the
             // bottom-right of the full-screen frame; we then offset inward by
-            // the inset to leave a margin. Upside-down: anchor the opposite
-            // corner so the widget ends up at the user's visual bottom-right
-            // either way (the camera-icon overlay is also counter-rotated).
+            // the inset to leave the safe-area margin. Upside-down: anchor
+            // the opposite corner so the widget ends up at the user's visual
+            // bottom-right either way (the icon is counter-rotated below).
             let anchor: UnitPoint = isUpsideDown ? .topLeading : .bottomTrailing
             let offsetX: CGFloat = !cameraMinimized ? 0
                 : (isUpsideDown ? cornerInsetX : -cornerInsetX)
