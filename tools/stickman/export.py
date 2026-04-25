@@ -1,83 +1,38 @@
 """Export the user's hand-baked Blender → stickman.usdz.
 
-Source file: `posture_buddy_v3_baked.blend`. The animation has already been
-baked in Blender's UI ("Bake Action" with Visual Keying + Clear Constraints),
-so every pose bone has per-frame FK keyframes and nothing depends on IK /
-Spline IK / drivers anymore. We also append a chair mesh (`chairoff.blend`)
-into the scene, parent it to a container, and scale + position it so the
-buddy ends up seated on it.
+Source file: `posture_buddy_v6_baked.blend`. The chair is now embedded in
+the .blend itself (pre-scaled and positioned relative to the buddy), and the
+animation is baked to 100 frames of FK keyframes — nothing depends on IK /
+Spline IK / drivers anymore. So this script is mostly a pass-through to USD
+with one post-import tweak: split the head off into its own mesh + material
+instance so the Swift side can tint only the head.
 """
 
-import bpy, os, math
+import bpy, os
 
 # Paths are resolved from this script's location so the pipeline works no
 # matter where it's invoked from:
 #   <repo-root>/tools/stickman/export.py
-#   <repo-root>/assets/chairoff.blend
 #   <repo-root>/Posture Buddy/stickman.usdz
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT  = os.path.abspath(os.path.join(_SCRIPT_DIR, "..", ".."))
 OUT         = os.path.join(_REPO_ROOT, "Posture Buddy", "stickman.usdz")
-CHAIR_BLEND = os.path.join(_REPO_ROOT, "assets", "chairoff.blend")
-
-# Chair comes in at ~14 Blender units tall from Sketchfab; buddy is ~2 units.
-# Scale the chair by ~0.08 so its seat lands near the buddy's butt height.
-# The chair was modeled far from its own origin (seat center ≈ (8.03, -0.31,
-# 8.16)); shift translation to cancel that offset + a little extra lift so
-# the seat top meets the buddy's butt.
-CHAIR_SCALE = 0.07
-# Pre-scale offset from Blender origin → where we want chair to sit (in
-# the container's local space, i.e. Blender Z-up at chair scale). X/Y cancel
-# the chair's own model offset; Z keeps the seat at the buddy's butt height
-# even after scale changes (base drops with scale, shortening leg dangle).
-CHAIR_TRANSLATION = (-0.562, -0.08, 0.30)  # x centered, nudged slightly back + up
-CHAIR_EULER_Z = math.radians(0)           # yaw
 
 scene = bpy.context.scene
 scene.frame_start = 0
-scene.frame_end = 50
+scene.frame_end = 100
 
-# Idempotent: ensure BodyMesh's armature modifier points at Ctrl_Rig.
-if 'BodyMesh' in bpy.data.objects and 'Ctrl_Rig' in bpy.data.objects:
-    mesh = bpy.data.objects['BodyMesh']
-    ctrl = bpy.data.objects['Ctrl_Rig']
-    for m in mesh.modifiers:
-        if m.type == 'ARMATURE' and m.object is not ctrl:
-            print(f"Repointing BodyMesh.{m.name!r} -> {ctrl.name!r}")
-            m.object = ctrl
+# NOTE: do NOT repoint BodyMesh's armature modifier here. v6 ships with the
+# mesh skinned to `GameRig` (the deformation rig), with `Ctrl_Rig` acting
+# only as the artist-facing control rig. Forcing the modifier at Ctrl_Rig
+# leaves BodyMesh skinned to bones that don't move — the mesh visibly
+# explodes into floating limbs because the rest pose doesn't match the
+# baked-frame intentions. Trust the blend's modifier target.
 
-# Drop anything that isn't the skinned mesh or the rig.
-KEEP = {'BodyMesh', 'Ctrl_Rig'}
-victims = [o for o in list(bpy.data.objects) if o.name not in KEEP]
-print(f"Removing {len(victims)}: {[o.name for o in victims]}")
-for o in victims:
-    bpy.data.objects.remove(o, do_unlink=True)
-
-# Append the chair from chairoff.blend. Everything (meshes, empties, curve)
-# stays in one container so we can scale/position as a group.
-print(f"\nAppending chair from {CHAIR_BLEND}")
-with bpy.data.libraries.load(CHAIR_BLEND, link=False) as (data_from, data_to):
-    data_to.objects = list(data_from.objects)
-chair_objs = [o for o in data_to.objects if o is not None]
-for o in chair_objs:
-    scene.collection.objects.link(o)
-
-chair_container = bpy.data.objects.new("ChairContainer", None)
-scene.collection.objects.link(chair_container)
-chair_container.scale = (CHAIR_SCALE, CHAIR_SCALE, CHAIR_SCALE)
-chair_container.location = CHAIR_TRANSLATION
-chair_container.rotation_euler = (0, 0, CHAIR_EULER_Z)
-
-# Re-parent every top-level appended object (no parent within the chair set)
-# to our container so scale + translation propagate.
-appended_names = {o.name for o in chair_objs}
-for o in chair_objs:
-    if o.parent is None or o.parent.name not in appended_names:
-        o.parent = chair_container
-
-print(f"  appended {len(chair_objs)} chair objects")
-
-# Collapse kept objects into the scene master collection + unhide.
+# Promote every object into the master collection and unhide it. v6's
+# GameRig in particular lives in a hidden collection and won't show up in
+# the active view layer otherwise — which would make the visual-keying
+# bake below fail with `RuntimeError: ViewLayer does not contain object`.
 master = scene.collection
 for col in list(bpy.data.collections):
     for o in list(col.objects):
@@ -91,6 +46,91 @@ for o in bpy.data.objects:
 for col in list(bpy.data.collections):
     if not col.objects and not col.children:
         bpy.data.collections.remove(col)
+
+# Bake the visual pose of GameRig from frame 0..end. v6 keyframes the
+# animation on Ctrl_Rig (the artist-facing rig); GameRig follows via 78
+# pose-bone copy-transforms constraints. USD/SceneKit don't evaluate
+# Blender constraints, so without this step GameRig exports in its rest
+# pose (T-pose) regardless of what frame we're on, and dropping Ctrl_Rig
+# below would leave the runtime mesh stuck. Visual keying captures the
+# constraint-evaluated pose into GameRig's own action; clearing the
+# constraints afterwards detaches it from Ctrl_Rig entirely.
+ctrl = bpy.data.objects.get('Ctrl_Rig')
+game = bpy.data.objects.get('GameRig')
+if ctrl is not None and game is not None:
+    print(f"Baking GameRig pose ({scene.frame_start}..{scene.frame_end}) from Ctrl_Rig…")
+    bpy.context.view_layer.objects.active = game
+    for o in bpy.context.view_layer.objects:
+        o.select_set(False)
+    game.select_set(True)
+    bpy.ops.object.mode_set(mode='POSE')
+    bpy.ops.pose.select_all(action='SELECT')
+    bpy.ops.nla.bake(
+        frame_start=scene.frame_start,
+        frame_end=scene.frame_end,
+        only_selected=True,
+        visual_keying=True,
+        clear_constraints=True,
+        bake_types={'POSE'},
+    )
+    bpy.ops.object.mode_set(mode='OBJECT')
+    print(f"  GameRig action keyframed; constraints cleared.")
+
+# Drop everything that doesn't need to ship in the USDZ:
+#   • CURVE objects (BezierCurve, L_*, R_*) are Spline-IK target curves left
+#     over from the pre-bake rig. The animation is fully baked to FK
+#     keyframes, so the curves are cosmetic.
+#   • Meshes prefixed `CS_` are Blender bone-shape widgets (custom visual
+#     handles on the armature's bones in the viewport only).
+#   • Meshes whose origin sits > STRAY_DISTANCE from scene origin are
+#     leftover test geometry (v6 ships with two stray cylinders at x≈-16
+#     that otherwise render as floating rectangles next to the buddy).
+#   • `Ctrl_Rig` is the artist-facing control rig. The actual deform rig
+#     bound to BodyMesh is `GameRig`, and the animation is baked onto
+#     GameRig's bones, so Ctrl_Rig is dead weight in the USDZ. Worse, the
+#     two-armature setup confuses SceneKit's USD importer — the SCNSkinner
+#     can end up referencing bones from the wrong rig and the mesh renders
+#     in the wrong place / wrong orientation. Dropping it keeps the import
+#     unambiguous.
+STRAY_DISTANCE = 5.0
+victims = []
+for o in list(bpy.data.objects):
+    if o.type == 'CURVE':
+        victims.append(o)
+    elif o.type == 'MESH' and o.name.startswith('CS_'):
+        victims.append(o)
+    elif o.type == 'MESH' and max(abs(o.location.x), abs(o.location.y), abs(o.location.z)) > STRAY_DISTANCE:
+        victims.append(o)
+    elif o.type == 'ARMATURE' and o.name == 'Ctrl_Rig':
+        victims.append(o)
+if victims:
+    print(f"Dropping {len(victims)} object(s): {[o.name for o in victims]}")
+    for o in victims:
+        bpy.data.objects.remove(o, do_unlink=True)
+
+# BodyMesh in v6 ships without any material assignment. Without a material
+# the USD export emits no material binding for the prim, and SceneKit
+# imports it as effectively invisible (only the chair + the Swift-tinted
+# HeadMesh end up rendering). Assign a default Principled BSDF — slightly
+# glossy white — so the body renders. This same material then propagates
+# to HeadMesh via the head-split step below (which copies material slot 0
+# off BodyMesh), keeping the head + body shading consistent.
+body_obj_for_mat = bpy.data.objects.get('BodyMesh')
+if body_obj_for_mat is not None and not [m for m in body_obj_for_mat.data.materials if m is not None]:
+    print("BodyMesh has no material — assigning default shiny white")
+    mat = bpy.data.materials.new(name='BodyMaterial')
+    mat.use_nodes = True
+    bsdf = mat.node_tree.nodes.get('Principled BSDF')
+    if bsdf is not None:
+        bsdf.inputs['Base Color'].default_value = (1.0, 1.0, 1.0, 1.0)
+        bsdf.inputs['Roughness'].default_value = 0.3   # mild gloss
+    body_obj_for_mat.data.materials.append(mat)
+
+# NOTE: do NOT bpy.ops.mesh.normals_make_consistent on BodyMesh here.
+# Entering Edit mode disturbs the skinning bind pose (Blender re-evaluates
+# the mesh from the current armature state) and the rig drifts out of the
+# chair on iOS. Back-face culling is handled in Swift instead by setting
+# `isDoubleSided = true` on every imported material.
 
 # Split the head off of BodyMesh into its own HeadMesh with a dedicated
 # material instance, so Swift can tint the head's diffuse directly without
@@ -156,6 +196,7 @@ print(f"\nExported → {OUT}  size={os.path.getsize(OUT)} bytes  "
 
 # ---- preview render so we can eyeball pose + chair placement without
 # touching the iPhone. Eevee, ~1s, side view matching the iOS camera.
+import math
 PREVIEW = OUT.replace('.usdz', '_preview.png')
 scene.render.engine = 'BLENDER_EEVEE'
 scene.render.resolution_x = 600

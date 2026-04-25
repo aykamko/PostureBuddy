@@ -360,6 +360,33 @@ struct PostureBuddy3DView: UIViewRepresentable {
         Log.line("[Buddy3D]",
             "animations found: \(count)  longest duration: \(String(format: "%.3f", longest))s")
 
+        // Force every imported material to render both sides. Pieces of the
+        // body rig in the v6 model have flipped normals; under SceneKit's
+        // default back-face culling the limbs come out invisible (Eevee's
+        // preview renders them anyway because Eevee defaults to two-sided).
+        scene.rootNode.enumerateHierarchy { node, _ in
+            for m in node.geometry?.materials ?? [] {
+                m.isDoubleSided = true
+            }
+        }
+
+        // Last-ditch: if BodyMesh's geometry came across with no material
+        // binding at all (Blender → USD → SceneKit can drop materials in
+        // edge cases), give it a plain white PBR material so the body
+        // doesn't render as fully transparent.
+        if let bodyGeoNode = findFirstGeometryNode(prefixed: "BodyMesh", in: scene.rootNode),
+           let geo = bodyGeoNode.geometry,
+           geo.materials.isEmpty {
+            let m = SCNMaterial()
+            m.lightingModel = .physicallyBased
+            m.diffuse.contents = UIColor.white
+            m.metalness.contents = 0.0
+            m.roughness.contents = 0.3
+            m.isDoubleSided = true
+            geo.materials = [m]
+            Log.line("[Buddy3D]", "BodyMesh had no materials — assigned default white")
+        }
+
         // Head has been split off as its own mesh in the exporter so we can
         // tint its material directly (no shader modifier). Search for the
         // HeadMesh node and cache its first material.
@@ -409,6 +436,22 @@ struct PostureBuddy3DView: UIViewRepresentable {
         }
         for c in root.childNodes {
             if let m = findMaterial(for: nodeNamePrefix, in: c) { return m }
+        }
+        return nil
+    }
+
+    /// Find the first node carrying actual geometry whose name (or whose
+    /// ancestor's name) starts with `prefix`. Used to install a fallback
+    /// material if the imported mesh came across without one.
+    private static func findFirstGeometryNode(prefixed prefix: String, in root: SCNNode) -> SCNNode? {
+        if let name = root.name, name.hasPrefix(prefix) {
+            if root.geometry != nil { return root }
+            for c in root.childNodes {
+                if c.geometry != nil { return c }
+            }
+        }
+        for c in root.childNodes {
+            if let f = findFirstGeometryNode(prefixed: prefix, in: c) { return f }
         }
         return nil
     }

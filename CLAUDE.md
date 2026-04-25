@@ -111,8 +111,8 @@ Workflow:
 The app's primary user-facing visual. Lives at `Views/PostureBuddy3DView.swift` — a `UIViewRepresentable` wrapping an `SCNView`.
 
 #### Asset pipeline
-- Source `.blend`s live in `assets/` at the repo root: `posture_buddy_v3_baked.blend` (rigged + animated stickman, 0 = upright, 50 = fully slouched) and `chairoff.blend` (static swivel chair mesh).
-- `tools/stickman/export.sh` → `tools/stickman/export.py`: headless Blender bake that repoints the body mesh's armature modifier at `Ctrl_Rig`, strips debug widgets, appends + positions the chair, splits the head off into its own `HeadMesh` with a dedicated material, and USD-exports the 0–50 frame animation. Produces `Posture Buddy/stickman.usdz` (the shipped asset) + `Posture Buddy/stickman_preview.png` (an Eevee render of frame 0 so we can sanity-check pose/chair placement without launching the app). See `tools/stickman/README.md` for the full pipeline.
+- Source `.blend` lives in `assets/` at the repo root: `posture_buddy_v6_baked.blend` — rigged + animated stickman (0 = upright, 100 = fully slouched) with the swivel chair pre-embedded and positioned. Older revisions (`posture_buddy_v3_baked.blend`, `posture_buddy_v5_baked.blend`) and the previously-separate `chairoff.blend` are kept in `assets/` for history but no longer used by the pipeline.
+- `tools/stickman/export.sh` → `tools/stickman/export.py`: headless Blender bake that repoints the body mesh's armature modifier at `Ctrl_Rig`, drops rig widgets / stray geometry (CURVE objects, `CS_*` bone-shape meshes, and meshes whose origin is >5 world units from scene origin), splits the head off into its own `HeadMesh` with a dedicated material, and USD-exports the 0–100 frame animation. Produces `Posture Buddy/stickman.usdz` (the shipped asset) + `Posture Buddy/stickman_preview.png` (an Eevee render of frame 0 so we can sanity-check pose/chair placement without launching the app). See `tools/stickman/README.md` for the full pipeline.
 
 #### Scene / rendering
 - SceneKit imports `stickman.usdz`, then `PostureBuddy3DView.makeScene` wraps the imported tree in two containers:
@@ -123,7 +123,7 @@ The app's primary user-facing visual. Lives at `Views/PostureBuddy3DView.swift` 
 - **`PoseEstimator.dominantEar: EarSide?`** is a `@Published` shadow of `PostureBaselines.dominantEar`; the baselines struct is the persisted authority and the published property exists so SwiftUI can observe mirroring changes.
 
 #### Slouch animation
-- The Blender clip is 0–50 frames (≈2.08 s at 24 fps) from upright to fully slouched. At load, `inventoryAnimations` walks the scene, sets `usesSceneTimeBase = true` on every imported `SCNAnimationPlayer`, calls `play()`, and records the longest duration on the Coordinator.
+- The Blender clip is 0–100 frames (≈4.17 s at 24 fps) from upright to fully slouched. At load, `inventoryAnimations` walks the scene, sets `usesSceneTimeBase = true` on every imported `SCNAnimationPlayer`, calls `play()`, and records the longest duration on the Coordinator.
 - `updateUIView` computes `slouchRatio(for: score) ∈ [0, 1]` from the posture score (ramp: score ≥ 90 → 0, ≤ 30 → 1) and stores `targetSceneTime = ratio × duration` on the Coordinator.
 - The Coordinator is also the `SCNSceneRendererDelegate`. Its `renderer(_:updateAtTime:)` callback eases the view's `sceneTime` toward `targetSceneTime` each frame (exp-smooth with a ~5 rate-per-second, ≈80% closure in 0.32 s). Setting `sceneTime` directly in `updateUIView` was visibly choppy because SwiftUI re-runs it at the score's update cadence (~10 Hz); the per-frame delegate interpolation makes the animation smooth.
 - `view.rendersContinuously = true` so the delegate ticks every frame.
@@ -222,12 +222,14 @@ Posture Buddy Watch App/                (watchOS target)
 └── WatchPostureReceiver.swift          WCSession delegate; plays WKInterfaceDevice haptics on incoming `slouch`/`recovery` events
 
 assets/                                 Source .blend files baked into stickman.usdz
-├── posture_buddy_v3_baked.blend        Rigged + animated stickman (frame 0 upright, frame 50 slouched; pose baked to FK keyframes)
-└── chairoff.blend                      Static swivel chair mesh (CC-BY, Sketchfab)
+├── posture_buddy_v6_baked.blend        Current pipeline source — rigged + animated stickman with embedded chair (frame 0 upright, frame 100 slouched; pose baked to FK keyframes)
+├── posture_buddy_v3_baked.blend        Legacy — historic earlier revision, no longer referenced
+├── posture_buddy_v5_baked.blend        Legacy — historic earlier revision, no longer referenced
+└── chairoff.blend                      Legacy — standalone swivel chair mesh, embedded into v6 already
 
 tools/stickman/                         Blender → USDZ pipeline
 ├── export.sh                           Headless wrapper; `./tools/stickman/export.sh [optional .blend]`
-├── export.py                           Repoints armature, appends chair, splits head off into HeadMesh, exports animation, renders preview PNG
+├── export.py                           Repoints armature, drops rig widgets + stray geometry, splits head off into HeadMesh, exports animation, renders preview PNG
 └── README.md                            Full pipeline notes (rig overview, re-export instructions, attribution)
 ```
 

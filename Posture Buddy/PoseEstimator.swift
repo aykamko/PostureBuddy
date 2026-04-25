@@ -224,7 +224,17 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
     ) {
         let now = CACurrentMediaTime()
         guard lastProcessedTime.shouldFire(now: now, minInterval: 0.1) else { return }
-        guard let (body, face) = runVisionRequests(on: sampleBuffer) else { return }
+        guard let visionResult = runVisionRequests(on: sampleBuffer) else { return }
+        // Vision request completed without throwing → ANE has the model loaded.
+        // Flip readiness even if no body is in frame yet so the loading spinner
+        // doesn't sit indefinitely waiting for the user to step into view.
+        guard let body = visionResult.body else {
+            Task { @MainActor in
+                if !self.isTrackingReady { self.isTrackingReady = true }
+            }
+            return
+        }
+        let face = visionResult.face
 
         // Per-frame yaw telemetry: raw candidate features for the adaptive selector.
         // Which two we actually use for classification is decided at calibration time
@@ -289,31 +299,34 @@ final class PoseEstimator: NSObject, ObservableObject, AVCaptureVideoDataOutputS
             faceLandmarks: Self.extractFaceLandmarks(from: face),
             score: scored?.score
         )
-        let hasValidAngles = angles != nil
 
         Task { @MainActor in
             self.currentPose = pose
-            if hasValidAngles && !self.isTrackingReady {
+            if !self.isTrackingReady {
                 self.isTrackingReady = true
             }
         }
     }
 
     /// Runs body + face detection on the given sample buffer using the latest
-    /// orientation. Returns nil if no body observation was found (face is optional).
+    /// orientation. Returns nil only when the Vision handler throws (model
+    /// failed to run). A non-nil result with `body == nil` means the model
+    /// ran successfully but no body was detected this frame.
     nonisolated private func runVisionRequests(
         on sampleBuffer: CMSampleBuffer
-    ) -> (body: VNHumanBodyPoseObservation, face: VNFaceObservation?)? {
+    ) -> (body: VNHumanBodyPoseObservation?, face: VNFaceObservation?)? {
         let bodyRequest = VNDetectHumanBodyPoseRequest()
         let faceRequest = VNDetectFaceLandmarksRequest()
         faceRequest.revision = VNDetectFaceLandmarksRequest.currentRevision
 
         let orientation = visionOrientation.withLock { $0 }
         let handler = VNImageRequestHandler(cmSampleBuffer: sampleBuffer, orientation: orientation)
-        try? handler.perform([bodyRequest, faceRequest])
-
-        guard let body = bodyRequest.results?.first else { return nil }
-        return (body, faceRequest.results?.first)
+        do {
+            try handler.perform([bodyRequest, faceRequest])
+        } catch {
+            return nil
+        }
+        return (bodyRequest.results?.first, faceRequest.results?.first)
     }
 
     /// Scores the current frame against the calibrated baselines with exponential

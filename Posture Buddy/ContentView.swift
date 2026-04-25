@@ -73,6 +73,17 @@ struct ContentView: View {
     /// little tonal separation from the backdrop.
     private static let backdropSlate = Color(red: 36/255, green: 37/255, blue: 43/255)
 
+    /// Window-level safe area insets — used to position floating layers
+    /// (score bubble) at known offsets relative to the status bar /
+    /// Dynamic Island. `GeometryProxy.safeAreaInsets` inside an
+    /// `.ignoresSafeArea()` reader can come back as zero on this iOS, so
+    /// reading from the window directly is the reliable path.
+    private static var windowSafeAreaInsets: UIEdgeInsets {
+        UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow }
+            .first?.safeAreaInsets ?? .zero
+    }
+
     var body: some View {
         mainContent
             .animation(.easeInOut(duration: 0.3), value: isUpsideDown)
@@ -442,22 +453,29 @@ struct ContentView: View {
     /// Floating score readout. In buddy view (camera minimized) it hovers
     /// above the buddy's head — anchored to the actual projected head
     /// position from `PostureBuddy3DView`. In camera view it slides to the
-    /// top-left of the safe area (no tail). The body-level
-    /// `.animation(value: cameraMinimized)` interpolates the position smoothly.
+    /// top-left, mirroring the top-right menu button's safe-area position.
+    /// The body-level `.animation(value: cameraMinimized)` interpolates the
+    /// position smoothly.
     @ViewBuilder
     private var scoreBubbleLayer: some View {
         GeometryReader { geo in
-            let safeTop = geo.safeAreaInsets.top
-            let safeLeading = geo.safeAreaInsets.leading
+            // Read the safe area straight from the window — `geo.safeAreaInsets`
+            // inside an `.ignoresSafeArea()` GeometryReader can come back zero
+            // on this iOS, which would shove the bubble up under the status
+            // bar. The window's insets are authoritative regardless of layout
+            // tricks above us.
+            let insets = Self.windowSafeAreaInsets
+            let safeTop = insets.top
+            let safeLeading = insets.left
             let bubbleW = ScoreBubble.circleSize
             let bubbleH = ScoreBubble.totalHeight
             let tailGap: CGFloat = 4   // small visual gap between tail tip and head
             let buddyXOffset: CGFloat = 5  // nudge the bubble right of head center
 
-            // Camera-view position: top-left of the safe area, well clear of
-            // the status bar / Dynamic Island. `max(...)` constrains the
-            // bbox top below the safe-area boundary so the bubble sits
-            // entirely inside the safe area.
+            // Camera-view position: top-left, mirroring the menu's
+            // `.padding(.trailing, 16) + .padding(.top, 8)` inside the safe
+            // area. Same .top-padding + same effective inset so the two
+            // chrome elements visually balance.
             let topLeftCenterX = safeLeading + 16 + bubbleW / 2
             let topLeftCenterY = safeTop + 8 + bubbleH / 2
 
